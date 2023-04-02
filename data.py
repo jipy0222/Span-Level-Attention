@@ -105,7 +105,7 @@ class SpanDataset(Dataset):
             else:
                 filter_by_empty_label_cnt += 1
 
-        # self.data.sort(key=self.instance_length_getter)
+        self.data.sort(key=self.instance_length_getter)
 
         self.length_map = {}
         for idx, rec in enumerate(self.data):
@@ -149,3 +149,27 @@ if __name__ == '__main__':
     dataset = SpanDataset(data_path, encoder_dict, train_frac=1.0, length_filter=None)
     for idx in range(5):
         print(dataset[idx])
+
+# exapmle: 
+# 
+# {'subwords': 
+# {'bert': tensor([  101,  1284,  4161,  5834, 13967,  1128,  1106,  2824,   170,  1957, 2596,  1104, 14754,  1975,   119,   102])}, 
+# 'subword_to_word_idx': 
+# {'bert': tensor([-1,  0,  1,  1,  2,  3,  4,  5,  6,  7,  8,  9, 10, 11, 12, -1])},
+# 'spans1': {'bert': [[12, 13]]}, 'spans2': None, 
+# 'labels': [[0]], 'seq_len': 13}
+
+# {'subwords': {'bert': tensor([  101,   160,  2924,  1563, 18405,  1116,  1113,  1103,  2038,  2746,
+#          1104,  1975,   131, 21342, 19917,  1104, 16191, 17204,  3757,   102])}, 'subword_to_word_idx': {'bert': tensor([-1,  0,  0,  1,  2,  2,  3,  4,  5,  6,  7,  8,  9, 10, 11, 12, 13, 13,
+#         14, -1])}, 'spans1': {'bert': [[1, 18]]}, 'spans2': None, 'labels': [[1]], 'seq_len': 15}
+# {'subwords': {'bert': tensor([  101,  9996,  3543,  1113, 16191, 17204,  3757,  1110,  1103, 12267,
+#          1106,  1103, 15090,  3391,  1116, 17354,   119,   102])}, 'subword_to_word_idx': {'bert': tensor([-1,  0,  1,  2,  3,  3,  4,  5,  6,  7,  8,  9, 10, 11, 11, 12, 13, -1])}, 'spans1': {'bert': [[8, 15], [4, 6]]}, 'spans2': None, 'labels': [[1], [2]], 'seq_len': 14}
+# {'subwords': {'bert': tensor([  101,  1135,  1110,  2766,  1104,   170,  2425,   188,  7854,  1162,
+#           117,  3718,   188,  7854,  1279,   117,   170,  3321,  1668,  7115,
+#          1105, 25973,  3590,   117,  1105,  1103,  2038,  6250,   117,  1621,
+#          1168,  1614,   119,   102])}, 'subword_to_word_idx': {'bert': tensor([-1,  0,  1,  2,  3,  4,  5,  6,  6,  6,  7,  8,  9,  9,  9, 10, 11, 12,
+#         13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, -1])}, 'spans1': {'bert': [[25, 27]]}, 'spans2': None, 'labels': [[1]], 'seq_len': 28}
+# {'subwords': {'bert': tensor([  101,   138,  2425,   188,  7854,  1162,   117,  1210,  3718,   188,
+#          7854,  1279,   117,  1105,  1160, 15505,   188,  7854,  1279,   119,
+#           102])}, 'subword_to_word_idx': {'bert': tensor([-1,  0,  1,  2,  2,  2,  3,  4,  5,  6,  6,  6,  7,  8,  9, 10, 11, 11,
+#         11, 12, -1])}, 'spans1': {'bert': [[14, 14], [7, 7]]}, 'spans2': None, 'labels': [[3], [3]], 'seq_len': 13}

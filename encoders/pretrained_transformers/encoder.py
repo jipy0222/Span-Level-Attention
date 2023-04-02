@@ -17,7 +17,7 @@ BERT_MODEL_SIZES = ['base', 'large']
 
 class Encoder(nn.Module):
     def __init__(self, model='bert', model_size='base', cased=True,
-                 fine_tune=False, use_proj=False, proj_dim=256):
+                 fine_tune=False, **kwargs):
         super(Encoder, self).__init__()
         assert(model in MODEL_LIST)
 
@@ -52,7 +52,7 @@ class Encoder(nn.Module):
 
             if model == 'bert':
                 self.model = BertModel.from_pretrained(
-                    model_path, output_hidden_states=True).eval()
+                    model_path, output_hidden_states=True)
                 self.tokenizer = BertTokenizer.from_pretrained(
                     model_path, do_lower_case=do_lower_case)
 
@@ -71,13 +71,6 @@ class Encoder(nn.Module):
             for param in self.model.parameters():
                 param.requires_grad = False
 
-        if use_proj:
-            # Apply a projection layer to output of pretrained models
-            self.proj = nn.Linear(self.hidden_size, proj_dim)
-            # Update the hidden size
-            self.hidden_size = proj_dim
-        else:
-            self.proj = None
         # Set parameters required on top of pre-trained models
         self.weighing_params = nn.Parameter(torch.ones(self.num_layers))
 
@@ -222,19 +215,20 @@ class Encoder(nn.Module):
         input_mask = (batch_ids != self.tokenizer.pad_token_id).cuda().float()
 
         if not self.fine_tune:
-            # Get the embedding output separately
             with torch.no_grad():
-                encoded_layers = self.model(batch_ids, attention_mask=input_mask)
+                output_bert = self.model(
+                    batch_ids, attention_mask=input_mask, output_hidden_states=True)  # B x L x E
+                last_hidden_state = output_bert.last_hidden_state
+                encoded_layers = output_bert.hidden_states
         else:
-            # Get the embedding output separately
-            encoded_layers = self.model(batch_ids, attention_mask=input_mask)
-
-        # Add the embedding layer to the rest of the outputs
-        encoded_layers = encoded_layers.to_tuple()[2]
-        last_layer_states = encoded_layers[-1]
+            output_bert = self.model(
+                batch_ids, attention_mask=input_mask, output_hidden_states=True)  # B x L x E
+            last_hidden_state = output_bert.last_hidden_state
+            encoded_layers = output_bert.hidden_states
+        # Encoded layers also has the embedding layer - 0th entry
 
         if just_last_layer:
-            output = last_layer_states
+            output = last_hidden_state
         else:
             wtd_encoded_repr = 0
             soft_weight = nn.functional.softmax(self.weighing_params, dim=0)
@@ -244,10 +238,7 @@ class Encoder(nn.Module):
 
             output = wtd_encoded_repr
 
-        if self.proj:
-            return self.proj(output)
-        else:
-            return output
+        return output
 
 
 if __name__ == '__main__':
