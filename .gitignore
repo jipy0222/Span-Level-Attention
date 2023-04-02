@@ -1,2 +1,4 @@
-encoders/pretrained_transformer/bert_base_cased/
-encoders/pretrained_transformer/__pycache__/
+encoders/pretrained_transformers/bert_base_cased/
+encoders/pretrained_transformers/__pycache__/
+encoders/__pycache__/
+ontonotes/

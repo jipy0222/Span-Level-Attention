@@ -252,14 +252,15 @@ class Encoder(nn.Module):
 
 if __name__ == '__main__':
     mymodel = Encoder(model='bert', model_size='base', use_proj=False).cuda()
-    tokenized_input = mymodel.tokenize_sentence(
-        "Hello beautiful world!", get_subword_indices=False)
-    output = mymodel(tokenized_input)
+    tokenized_input = mymodel.tokenize_batch(
+        ["Hello beautiful world!", "Chomsky says hello."], get_subword_indices=True)
+    print("tokenized_input: ", tokenized_input)
+    output = mymodel(tokenized_input[0])
     print("output: ", output)
     print("output_size: ", output.size())
-    for idx in range(tokenized_input.shape[0]):
+    for idx in range(tokenized_input[0].shape[0]):
         print(mymodel.tokenizer.convert_ids_to_tokens(
-            tokenized_input[idx, :].tolist()))
+            tokenized_input[0][idx, :].tolist()))
     # model = Encoder(model='bert', model_size='base', use_proj=False).cuda()
     # example = torch.tensor([[101, 185, 119, 4850, 102],
     #                           [101, 185, 119, 1620, 102],

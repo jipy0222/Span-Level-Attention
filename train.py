@@ -8,9 +8,9 @@ import time
 import torch
 
 from encoders.pretrained_transformers import Encoder
-from task.model import SpanModel
-from task.data import SpanDataset
-from task.utils import instance_f1_info, f1_score, print_example
+from model import SpanModel
+from data import SpanDataset
+from utils import instance_f1_info, f1_score, print_example
 
 from util.iterator import FixLengthLoader
 from util.logger import configure_logger, get_logger

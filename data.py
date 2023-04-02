@@ -10,17 +10,12 @@ Different from the original code, here spans and labels are list, so one sentenc
 '''
 
 
-def _process_child_rel(child_rel_list):
-    return {tuple(p): (tuple(l), tuple(r)) for (p, (l, r)) in child_rel_list}
-
-
 class SpanDataset(Dataset):
     label_dict = dict()
     encoder = None
     def __init__(self, path, encoder_dict, train_frac=1.0, length_filter=None, **kwargs):
         super().__init__()
-        word_level_span_idx = kwargs.pop('word_level_span_idx')
-        has_parse_child_rel = kwargs.pop('has_parse_child_rel')
+        word_level_span_idx = kwargs.pop('word_level_span_idx', None)
         encoder_key_list = list(encoder_dict.keys())
         with open(path, 'r') as f:
             raw_data = f.readlines()
@@ -57,22 +52,28 @@ class SpanDataset(Dataset):
                         spans.append(span)
 
                 spans = tuple(spans)
+                # in case of multiple labels for one span in one sentence
                 if spans not in span_label_pair:
                     span_label_pair[spans] = set()
 
                 label = item['label']
                 self.add_label(label)
                 span_label_pair[spans].add(self.label_dict[label])
+            
+            # span_label_pair contains all the spans and labels need to be predicted in current sentence
+            # form: {(span1, span2[option]): {label1, label2, ...}, ...}
+            
             # Process
             def _process_span_idx(span_idx, encoder_key):
                 w2w_idx = subword_to_word_idx_dict[encoder_key]
                 span_idx = self.get_tokenized_span_indices(w2w_idx, span_idx)
                 return span_idx
             # spans : {
-            #            'span1': {'glove':[]
-            #                       'bert':[]},
+            #            'span1': {'glove':[[st1, ed1], [st2, ed2], ...]
+            #                      'bert':[[st1, ed1], [st2, ed2], ...]},
             #            'span2': {...}
-            #                             }
+            #            'label': [{labels for first span in this sentence}, {labels for second span}, ...]
+            #                                                                                                  }
             spans = {'span1': {}, 'span2': {}, 'label': []}
             for span in span_label_pair:
                 for encoder_key in encoder_key_list:
@@ -98,16 +99,13 @@ class SpanDataset(Dataset):
                     'labels': labels,
                     'seq_len': len(words)
                 }
-                if has_parse_child_rel:
-                    parse_child_rel = _process_child_rel(instance['parse_child_rel'])
-                    instance_dict['parse_child_rel'] = parse_child_rel
                 self.data.append(
                     instance_dict
                 )
             else:
                 filter_by_empty_label_cnt += 1
 
-        self.data.sort(key=self.instance_length_getter)
+        # self.data.sort(key=self.instance_length_getter)
 
         self.length_map = {}
         for idx, rec in enumerate(self.data):
@@ -124,10 +122,7 @@ class SpanDataset(Dataset):
         return len(self.data)
 
     def instance_length_getter(self, rec):
-        if 'glove' in rec['subwords']:
-            return len(rec['subwords']['glove'])
-        else:
-            return len(rec['subwords']['bert'])
+        return len(rec['subwords']['bert'])
 
     def __getitem__(self, index):
         return self.data[index]
@@ -144,3 +139,13 @@ class SpanDataset(Dataset):
     def add_label(cls, label):
         if label not in cls.label_dict:
             cls.label_dict[label] = len(cls.label_dict)
+
+
+if __name__ == '__main__':
+    from encoders.pretrained_transformers import Encoder
+    data_path = 'ontonotes/ner/train.json'
+    encoder_dict = {}
+    encoder_dict['bert'] = Encoder('bert', 'base', True, fine_tune = False)
+    dataset = SpanDataset(data_path, encoder_dict, train_frac=1.0, length_filter=None)
+    for idx in range(5):
+        print(dataset[idx])
