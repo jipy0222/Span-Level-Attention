@@ -1,19 +1,16 @@
-from torchtext.data import Iterator
 from torch.utils.data.sampler import SequentialSampler
 from torch.nn.utils.rnn import pad_sequence
 import torch
 
 pad_token_id = 0
 class FixLengthLoader(object):
-    def __init__(self, dataset, batch_size, shuffle, has_parse_child_rel=True):
+    def __init__(self, dataset, batch_size, shuffle):
         self.dataset = dataset
         self.shuffle = shuffle
         self.bs = batch_size
         self.sampler = SequentialSampler(self.dataset)
         self.item_dict_key = ['subwords','subword_to_word_idx','spans1','spans2']
         self.item_lst_key = ['labels','seq_len']
-        if has_parse_child_rel:
-            self.item_lst_key.append('parse_child_rel')
 
     def __iter__(self):
         batch = []
@@ -29,6 +26,7 @@ class FixLengthLoader(object):
             yield self.make_batch(batch)
 
     def __len__(self):
+    # this method means the number of batches
         lm = self.dataset.length_map
         l = 0
         for i in lm:
@@ -53,10 +51,7 @@ class FixLengthLoader(object):
                 else:
                     batch_dict[k].append(rec[k])
         for encoder_key in encoder_key_lst:
-            if encoder_key == "glove":
-                batch_dict['subwords'][encoder_key] = torch.stack(batch_dict['subwords'][encoder_key]).long()
-            else:
-                batch_dict['subwords'][encoder_key] = pad_sequence(batch_dict['subwords'][encoder_key], batch_first=True, padding_value=pad_token_id).long()
+            batch_dict['subwords'][encoder_key] = pad_sequence(batch_dict['subwords'][encoder_key], batch_first=True, padding_value=pad_token_id).long()
             if torch.cuda.is_available():
                 batch_dict['subwords'][encoder_key] = batch_dict['subwords'][encoder_key].cuda()
         batch_dict['seq_len'] = torch.tensor(batch_dict['seq_len'])

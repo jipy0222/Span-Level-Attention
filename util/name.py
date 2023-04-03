@@ -13,8 +13,8 @@ def compute_name(args, imp_opts):
 
     str_repr = str(opt_dict.items())
     hash_idx = hashlib.md5(str_repr.encode("utf-8")).hexdigest()
-    model_name = args.task + '_' + str(hash_idx)
-    if args.fine_tune_all or args.fine_tune_io_model:
+    model_name = args.task + '_' + args.slurm_comment + '_' + str(hash_idx)
+    if args.fine_tune:
         model_name = "ft_" + model_name
     return model_name
 
@@ -22,19 +22,16 @@ def compute_name(args, imp_opts):
 def get_model_path(exp_path, args):
     # because mlp-diora is default for many of the experiments without dtype as their args, so this function is needed to standardize the name
     imp_opts = [
-        'task', 'data_path', 'has_parse_child_rel',
+        'task', 'data_path',
         'batch_size', 'real_batch_size', 'eval_batch_size', 'epochs',
         'optimizer', 'learning_rate',
         'eval_step',
         'seed',
         'train_frac', 'train_length_filter',  # train filter
-        'span_dim', 'hidden_dim', 'use_proj',  # dim
+        'span_dim', 'use_proj',  # dim
         'model_type', 'model_size', 'cased',  # Encoder
         'pool_methods',  # SpanRepr
-        'fine_tune_all', 'fine_tune_io_model',
-        'io_model_init',"io_zero_init",
-        'io_model_path', 'io_flag_path', 'emb_path',
-        'k_shot', 'n_repeat'
+        'fine_tune'
     ]
     name = compute_name(args, imp_opts)
     model_path = os.path.join(exp_path, name)
