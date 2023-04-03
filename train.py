@@ -86,6 +86,8 @@ def validate(loader, model, output_example=False, use_argmax=False):
     numerator = denom_p = denom_r = 0
 
     for batch_dict in loader:
+        # print("batch_dict: ", batch_dict)
+        # print(batch_dict['subwords']['bert'].size())
         preds, ans = forward_batch(model, batch_dict, mode='pred', use_argmax=use_argmax)
         num, dp, dr = instance_f1_info(ans, preds)
         numerator += num

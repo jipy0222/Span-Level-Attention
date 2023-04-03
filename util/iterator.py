@@ -7,6 +7,7 @@ class FixLengthLoader(object):
     def __init__(self, dataset, batch_size, shuffle):
         self.dataset = dataset
         self.shuffle = shuffle
+        # TODO: shuffle is not implement!
         self.bs = batch_size
         self.sampler = SequentialSampler(self.dataset)
         self.item_dict_key = ['subwords','subword_to_word_idx','spans1','spans2']
@@ -18,6 +19,10 @@ class FixLengthLoader(object):
         for rec in self.dataset:
             length_getter = lambda x: self.dataset.instance_length_getter(x)
             if len(batch) > 0 and (len(batch) >= self.bs or length_getter(rec) != length):
+            # explain above: if batch is not empty and 
+            # (batch size is larger than batch size or length of current record is not equal to length of previous record)
+            # why not just use len(batch) >= self.bs?
+            # because the length of records in batch is not equal, so we need to pad them to the same length
                 yield self.make_batch(batch)
                 batch = []
             batch.append(rec)
