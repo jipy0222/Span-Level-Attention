@@ -143,7 +143,7 @@ class SpanDataset(Dataset):
 
 if __name__ == '__main__':
     from encoders.pretrained_transformers import Encoder
-    data_path = 'ontonotes/ner/train.json'
+    data_path = '/public/home/jipy/data/ontonotes/ner/train.json'
     encoder_dict = {}
     encoder_dict['bert'] = Encoder('bert', 'base', True, fine_tune = False)
     dataset = SpanDataset(data_path, encoder_dict, train_frac=1.0, length_filter=None)

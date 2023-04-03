@@ -118,24 +118,24 @@ def create_parser():
     # arguments from snippets
     parser = argparse.ArgumentParser()
     # data path
-    parser.add_argument('-data_path', type=str, default='./ontonotes/ner')
+    parser.add_argument('-data_path', type=str, default='../data/ontonotes/ner')
     parser.add_argument('-exp_path', type=str, default='./exp')
     # shortcuts
     # experiment type
     parser.add_argument('-task', type=str, default='nel', choices=('nel', 'ctl', 'coref', 'srl'))
 
     # training setting
-    parser.add_argument('-batch_size', type=int, default=10)
-    parser.add_argument('-real_batch_size', type=int, default=60)
-    parser.add_argument('-eval_batch_size', type=int, default=10)
+    parser.add_argument('-batch_size', type=int, default=32)
+    parser.add_argument('-real_batch_size', type=int, default=128)
+    parser.add_argument('-eval_batch_size', type=int, default=32)
     parser.add_argument('-epochs', type=int, default=20)
     parser.add_argument('-optimizer', type=str, default='Adam')
     parser.add_argument('-learning_rate', type=float, default=5e-4)
     parser.add_argument('-log_step', type=int, default=50)
     parser.add_argument('-eval_step', type=int, default=500)
     parser.add_argument('-seed', type=int, default=1111)
-    parser.add_argument('-train_length_filter', default=20, type=int)
-    parser.add_argument('-eval_length_filter', default=40, type=int)
+    parser.add_argument('-train_length_filter', default=100, type=int)
+    parser.add_argument('-eval_length_filter', default=100, type=int)
 
     # customized arguments
     parser.add_argument('-span_dim', type=int, default=256)
@@ -208,8 +208,7 @@ def main():
     #####################
     # Set whether fine tune token encoder.
     encoder_dict = {}
-    assert(type(args.pool_methods) == str)
-    args.pool_methods = [args.pool_methods]
+    args.pool_methods = args.pool_methods
     assert(len(args.pool_methods) == 1)
     encoder_dict[args.model_type] = Encoder(args.model_type, args.model_size, args.cased,
                                             fine_tune=args.fine_tune)

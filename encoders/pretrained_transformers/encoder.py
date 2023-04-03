@@ -48,7 +48,7 @@ class Encoder(nn.Module):
             else:
                 model_name += '-cased'
 
-            model_path = "./encoders/pretrained_transformers/" + model_name
+            model_path = "../pretraining-models/" + model_name
 
             if model == 'bert':
                 self.model = BertModel.from_pretrained(

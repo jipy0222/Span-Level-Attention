@@ -5,3 +5,6 @@ encoders/__pycache__/
 util/__pycache__/
 exp/
 ontonotes/
+train.slurm
+**.err
+**.out
