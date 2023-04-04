@@ -137,6 +137,13 @@ def _get_p2e_map(encoder_key_lst, pool_methods):
 
 
 if __name__ == '__main__':
+    from encoders.pretrained_transformers import Encoder
+
+    def calc_span_repr(span_net, encoded_input, span_indices, query_batch_idx):
+        span_start, span_end = span_indices[:, 0], span_indices[:, 1]
+        span_repr = span_net(encoded_input, span_start, span_end, query_batch_idx)
+        return span_repr
+
     batch = {'subwords': {'bert': torch.tensor([[  101,  1130,  1924,   118,   118,   102],
         [  101, 14153, 14153,   120,   119,   102],
         [  101,  1448,  1160,   120,   118,   102],
@@ -200,11 +207,70 @@ if __name__ == '__main__':
         [-1,  0,  0,  0,  0, -1],
         [-1,  0,  1,  2,  3, -1],
         [-1,  0,  1,  2,  3, -1],
-        [-1,  0,  0,  0,  1, -1]])}, 
+        [-1,  0,  0,  0,  1, -1]], device='cuda:0')}, 
         'spans1': {'bert': [[[2, 2]], [[2, 2], [1, 1]], [[2, 2], [1, 1]], [[2, 2]], [[2, 2]], [[2, 2]], [[1, 2]], [[2, 2]], [[1, 4]], [[2, 3]], [[1, 1]], [[3, 3]], [[1, 1]], [[4, 4]], [[3, 4]], [[3, 4]], [[2, 3]], [[3, 3]], [[1, 4]], [[1, 4]], [[1, 1]], [[2, 3]], [[1, 3]], [[3, 3]], [[2, 2]], [[3, 4], [1, 1]], [[1, 4]], [[1, 4]], [[1, 4]], [[1, 4]], [[1, 1]], [[1, 4]]]}, 
         'spans2': {}, 
         'labels': [[[7]], [[8], [8]], [[3], [3]], [[8]], [[8]], [[8]], [[8]], [[8]], [[1]], [[0]], [[3]], [[8]], [[3]], [[6]], [[3]], [[3]], [[7]], [[6]], [[6]], [[8]], [[3]], [[6]], [[6]], [[0]], [[8]], [[0], [6]], [[8]], [[8]], [[8]], [[8]], [[3]], [[12]]], 
         'seq_len': torch.tensor([3, 3, 3, 3, 3, 3, 2, 3, 4, 3, 4, 4, 4, 3, 2, 2, 4, 4, 4, 2, 4, 3, 2, 4,
-        3, 3, 2, 2, 1, 4, 4, 2])}
+        3, 3, 2, 2, 1, 4, 4, 2], device='cuda:0')}
 
 # torch.Size([32, 6])
+
+    subwords = batch['subwords']
+    spans_1 = batch['spans1']
+    spans_2 = batch['spans2']
+    token_encoder_output_dict = {}
+
+    encoder_key_lst = ['bert']
+    encoder_dict = {}
+    encoder_dict['bert'] = Encoder('bert', 'base', True, fine_tune=False).cuda()
+    token_encoder_output_dict = {}
+    for encoder_key in encoder_key_lst:
+        token_encoder_output_dict[encoder_key] = encoder_dict[encoder_key](subwords[encoder_key])
+    B = token_encoder_output_dict[encoder_key_lst[0]].shape[0]
+    query_batch_idx = [i
+                   for i in range(B)
+                   for _ in range(len(spans_1[encoder_key_lst[0]][i]))]
+
+    final_repr_list = []
+    # Collect pooled span repr.
+    encoder_key = 'bert'
+    span_net = get_span_module(method='attn',
+                            input_dim=768,
+                            use_proj=False,
+                            proj_dim=256).cuda()
+    print("orig_weight: ", span_net.attention_params)
+    my_span_net = get_span_module(method='myattn',
+                            input_dim=768,
+                            use_proj=False,
+                            proj_dim=256).cuda()
+    my_span_net.attention_params = span_net.attention_params
+    print("new_weight: ", my_span_net.attention_params)
+    print(span_net.attention_params == my_span_net.attention_params)
+
+    span_encoder_input = token_encoder_output_dict[encoder_key]
+
+    spans_idx_1 = _process_spans(spans_1[encoder_key])
+    print("span_encoder_input: ", span_encoder_input)
+    print("span_encoder_input_size: ", span_encoder_input.size())
+    print("span_idx_1: ", spans_idx_1)
+    print("span_idx_1_len: ", len(spans_idx_1))
+    print("query_batch_idx: ", query_batch_idx)
+    print("query_batch_idx_len: ", len(query_batch_idx))
+
+    s1_repr = calc_span_repr(span_net, span_encoder_input, spans_idx_1, query_batch_idx)
+    s1_repr_new = calc_span_repr(my_span_net, span_encoder_input, spans_idx_1, query_batch_idx)
+
+    print("s1_repr: ", s1_repr)
+    print("s1_repr_size: ", s1_repr.size())
+    print("s1_repr_new: ", s1_repr_new)
+    print("s1_repr_new_size: ", s1_repr_new.size())
+
+    print(s1_repr == s1_repr_new)
+        
+    s_repr = s1_repr
+    final_repr_list.append(s_repr)
+    
+    final_repr = torch.cat(final_repr_list, dim=1)
+
+    

@@ -29,16 +29,21 @@ class SpanRepr(ABC, nn.Module):
 
 
 class MeanSpanRepr(SpanRepr, nn.Module):
-    """Class implementing the avg span representation."""
+    """Class implementing the mean span representation."""
 
     def forward(self, encoded_input, start_ids, end_ids, query_batch_idx):
         if self.use_proj:
             encoded_input = self.proj(encoded_input)
-        span_lengths = (end_ids - start_ids + 1).unsqueeze(1)
-        span_masks = get_span_mask(start_ids, end_ids, encoded_input.shape[1])
-        to_masked_encoded_input = encoded_input[query_batch_idx, :, :]
-        span_repr = torch.sum(to_masked_encoded_input * span_masks, dim=1) / span_lengths.float()
-        return span_repr
+
+        tmp_encoded_input = encoded_input
+        bsz, seq, hd = encoded_input.size()
+        span_repr = torch.empty([bsz, seq, seq, hd], device=encoded_input.device)
+        for i in range(seq):
+            tmp_encoded_input = ((tmp_encoded_input[:, 0:seq - i, :] * i + encoded_input[:, i:, :]) / (i + 1)).float()
+            span_repr[:, range(seq - i), range(i, seq), :] = tmp_encoded_input
+        
+        res = span_repr[query_batch_idx, start_ids, end_ids, :]
+        return res
 
     def get_output_dim(self):
         if self.use_proj:
@@ -53,10 +58,15 @@ class EndPointRepr(SpanRepr, nn.Module):
     def forward(self, encoded_input, start_ids, end_ids, query_batch_idx):
         if self.use_proj:
             encoded_input = self.proj(encoded_input)
-        batch_size = encoded_input.shape[0]
-        span_repr = torch.cat([encoded_input[query_batch_idx, start_ids, :],
-                               encoded_input[query_batch_idx, end_ids, :]], dim=1)
-        return span_repr
+
+        bsz, seq, hd = encoded_input.size()
+        hd = hd*2
+        span_repr = torch.empty([bsz, seq, seq, hd], device=encoded_input.device)
+        for i in range(seq):
+            span_repr[:, range(seq - i), range(i, seq), :] = torch.cat((encoded_input[:, 0:seq-i, :], encoded_input[:, i:, :]), dim=2).float()
+        
+        res = span_repr[query_batch_idx, start_ids, end_ids, :]
+        return res
 
     def get_output_dim(self):
         if self.use_proj:
@@ -71,12 +81,15 @@ class DiffSumSpanRepr(SpanRepr, nn.Module):
     def forward(self, encoded_input, start_ids, end_ids, query_batch_idx):
         if self.use_proj:
             encoded_input = self.proj(encoded_input)
-        batch_size = encoded_input.shape[0]
-        span_repr = torch.cat([
-            encoded_input[query_batch_idx, end_ids, :] - encoded_input[query_batch_idx, start_ids, :],
-            encoded_input[query_batch_idx, end_ids, :] + encoded_input[query_batch_idx, start_ids, :]
-        ], dim=1)
-        return span_repr
+        
+        bsz, seq, hd = encoded_input.size()
+        hd = hd*2
+        span_repr = torch.empty([bsz, seq, seq, hd], device=encoded_input.device)
+        for i in range(seq):
+            span_repr[:, range(seq - i), range(i, seq), :] = torch.cat((encoded_input[:, i:, :]-encoded_input[:, 0:seq-i, :], encoded_input[:, i:, :]+encoded_input[:, 0:seq-i, :]), dim=2).float()
+        
+        res = span_repr[query_batch_idx, start_ids, end_ids, :]
+        return res
 
     def get_output_dim(self):
         if self.use_proj:
@@ -91,12 +104,49 @@ class MaxSpanRepr(SpanRepr, nn.Module):
     def forward(self, encoded_input, start_ids, end_ids, query_batch_idx):
         if self.use_proj:
             encoded_input = self.proj(encoded_input)
-        span_masks = get_span_mask(start_ids, end_ids, encoded_input.shape[1])
-        # put -inf to irrelevant positions
+
+        tmp_encoded_input = encoded_input
+        bsz, seq, hd = encoded_input.size()
+        span_repr = torch.empty([bsz, seq, seq, hd], device=encoded_input.device)
+        for i in range(seq):
+            tmp_encoded_input = (torch.maximum(encoded_input[:, i:, :], tmp_encoded_input[:, 0:seq - i, :])).float()
+            span_repr[:, range(seq - i), range(i, seq), :] = tmp_encoded_input
+        
+        res = span_repr[query_batch_idx, start_ids, end_ids, :]
+        return res
+
+    def get_output_dim(self):
+        if self.use_proj:
+            return self.proj_dim
+        else:
+            return self.input_dim
+
+
+class orig_AttnSpanRepr(SpanRepr, nn.Module):
+    """Class implementing the attention-based span representation."""
+
+    def __init__(self, input_dim, use_proj=False, proj_dim=256):
+        """just return the attention pooled term."""
+        
+        super(orig_AttnSpanRepr, self).__init__(input_dim, use_proj=use_proj, proj_dim=proj_dim)
+        if use_proj:
+            input_dim = proj_dim
+        self.attention_params = nn.Linear(input_dim, 1)
+        # Initialize weight to zero weight
+        # self.attention_params.weight.data.fill_(0)
+        # self.attention_params.bias.data.fill_(0)
+
+    def forward(self, encoded_input, start_ids, end_ids, query_batch_idx):
+        if self.use_proj:
+            encoded_input = self.proj(encoded_input)
+
+        span_mask = get_span_mask(start_ids, end_ids, encoded_input.shape[1])
+        attn_mask = (1 - span_mask) * (-1e10)
         to_masked_encoded_input = encoded_input[query_batch_idx, :, :]
-        tmp_repr = to_masked_encoded_input * span_masks - 1e10 * (1 - span_masks)
-        span_repr = torch.max(tmp_repr, dim=1)[0]
-        return span_repr
+        attn_logits = self.attention_params(to_masked_encoded_input) + attn_mask
+        attention_wts = nn.functional.softmax(attn_logits, dim=1)
+        attention_term = torch.sum(attention_wts * to_masked_encoded_input, dim=1)
+        return attention_term
 
     def get_output_dim(self):
         if self.use_proj:
@@ -123,13 +173,24 @@ class AttnSpanRepr(SpanRepr, nn.Module):
         if self.use_proj:
             encoded_input = self.proj(encoded_input)
 
-        span_mask = get_span_mask(start_ids, end_ids, encoded_input.shape[1])
-        attn_mask = (1 - span_mask) * (-1e10)
-        to_masked_encoded_input = encoded_input[query_batch_idx, :, :]
-        attn_logits = self.attention_params(to_masked_encoded_input) + attn_mask
-        attention_wts = nn.functional.softmax(attn_logits, dim=1)
-        attention_term = torch.sum(attention_wts * to_masked_encoded_input, dim=1)
-        return attention_term
+        bsz, seq, hd = encoded_input.size()
+        span_repr = torch.empty([bsz, seq, seq, hd], device=encoded_input.device)
+        for start in range(seq):
+            tmp_start_ids = torch.tensor([start]).repeat(seq-start).repeat(bsz)
+            tmp_end_ids = torch.arange(start, seq).repeat(bsz)
+            tmp_query_batch_idx = torch.arange(bsz).repeat_interleave(seq-start).tolist()
+
+            span_mask = get_span_mask(tmp_start_ids, tmp_end_ids, encoded_input.shape[1])
+
+            attn_mask = (1 - span_mask) * (-1e10)
+            to_masked_encoded_input = encoded_input[tmp_query_batch_idx, :, :]
+            attn_logits = self.attention_params(to_masked_encoded_input) + attn_mask
+            attention_wts = nn.functional.softmax(attn_logits, dim=1)
+            attention_term = torch.sum(attention_wts * to_masked_encoded_input, dim=1)
+            span_repr[tmp_query_batch_idx, tmp_start_ids, tmp_end_ids, :] = attention_term
+
+        res = span_repr[query_batch_idx, start_ids, end_ids, :]
+        return res
 
     def get_output_dim(self):
         if self.use_proj:
