@@ -120,11 +120,11 @@ def create_parser():
     # arguments from snippets
     parser = argparse.ArgumentParser()
     # data path
-    parser.add_argument('-data_path', type=str, default='../data/ontonotes/ner')
+    parser.add_argument('-data_path', type=str, default='../data/ontonotes/nel')
     parser.add_argument('-exp_path', type=str, default='./exp')
     # shortcuts
     # experiment type
-    parser.add_argument('-task', type=str, default='nel', choices=('nel', 'ctl', 'coref', 'srl'))
+    parser.add_argument('-task', type=str, default='nel', choices=('nel', 'ctl', 'coref', 'src'))
 
     # training setting
     parser.add_argument('-batch_size', type=int, default=32)
