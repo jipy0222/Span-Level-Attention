@@ -1,4 +1,5 @@
 """Different batched non-parametric span representations."""
+import sys
 import torch
 import torch.nn as nn
 from abc import ABC, abstractmethod
@@ -231,21 +232,21 @@ class FullyConnectSpanRepr(ComplexSpanRepr, nn.Module):
     
     def __init__(self, method, input_dim, use_proj=False, proj_dim=256, attn_schema='none', nhead=2, nlayer=2):
         
-        super(FullyConnectSpanRepr, self).__init__(input_dim, use_proj=use_proj, proj_dim=proj_dim, 
+        super(FullyConnectSpanRepr, self).__init__(method, input_dim, use_proj=use_proj, proj_dim=proj_dim, 
                                                    attn_schema=attn_schema, nhead=nhead, nlayer=nlayer)
         if use_proj:
             input_dim = proj_dim
         if method == 'attn':
             self.attention_params = nn.Linear(input_dim, 1)
         if self.method in ['max', 'mean', 'attn']:
-            self.output_dim = self.input_dim
+            self.output_dim = input_dim
         elif self.method in ['endpoint', 'diff_sum']:
-            self.output_dim = self.input_dim * 2
+            self.output_dim = input_dim * 2
 
         if self.attn_schema == 'fullyconnect':
-            trans_encoder_layer = nn.TransformerEncoderLayer(d_model=self.output_dim, nhead=self.nheads)
+            trans_encoder_layer = nn.TransformerEncoderLayer(d_model=self.output_dim, nhead=self.nhead)
             trans_layernorm = nn.LayerNorm(self.output_dim)
-            self.trans = nn.TransformerEncoder(trans_encoder_layer, num_layers=self.nlayers, norm=trans_layernorm)
+            self.trans = nn.TransformerEncoder(trans_encoder_layer, num_layers=self.nlayer, norm=trans_layernorm)
         else:
             raise RuntimeError("Incorrect span module place.")
 
@@ -296,7 +297,7 @@ class FullyConnectSpanRepr(ComplexSpanRepr, nn.Module):
                 attention_term = torch.sum(attention_wts * to_masked_encoded_input, dim=1)
                 span_repr[tmp_query_batch_idx, tmp_start_ids, tmp_end_ids, :] = attention_term
         
-        bsz, seq, hd = span_repr.size()
+        bsz, seq, _, hd = span_repr.size()
         seq_t = torch.arange(seq)
         seq_x = torch.broadcast_to(seq_t[None, None, ...], (bsz, seq, seq))
         seq_y = torch.broadcast_to(seq_t[None, ..., None], (bsz, seq, seq))
@@ -318,21 +319,20 @@ class AttnSchemaSpanRepr(ComplexSpanRepr, nn.Module):
     
     def __init__(self, method, input_dim, use_proj=False, proj_dim=256, attn_schema='none', nhead=2, nlayer=2):
         
-        super(AttnSchemaSpanRepr, self).__init__(input_dim, use_proj=use_proj, proj_dim=proj_dim, 
+        super(AttnSchemaSpanRepr, self).__init__(method, input_dim, use_proj=use_proj, proj_dim=proj_dim, 
                                                    attn_schema=attn_schema, nhead=nhead, nlayer=nlayer)
         if use_proj:
             input_dim = proj_dim
         if method == 'attn':
             self.attention_params = nn.Linear(input_dim, 1)
         if self.method in ['max', 'mean', 'attn']:
-            self.output_dim = self.input_dim
+            self.output_dim = input_dim
         elif self.method in ['endpoint', 'diff_sum']:
-            self.output_dim = self.input_dim * 2
-
+            self.output_dim = input_dim * 2
         if self.attn_schema in ['insidetoken', 'samehandt']:
-            trans_encoder_layer = myTransformerEncoderLayer(d_model=self.output_dim, nhead=self.nheads)
+            trans_encoder_layer = myTransformerEncoderLayer(d_model=self.output_dim, nhead=self.nhead)
             trans_layernorm = nn.LayerNorm(self.output_dim)
-            self.trans = myTransformerEncoder(trans_encoder_layer, num_layers=self.nlayers, norm=trans_layernorm)
+            self.trans = myTransformerEncoder(trans_encoder_layer, num_layers=self.nlayer, norm=trans_layernorm)
         else:
             raise RuntimeError("Incorrect span module place.")
 
@@ -383,18 +383,20 @@ class AttnSchemaSpanRepr(ComplexSpanRepr, nn.Module):
                 attention_term = torch.sum(attention_wts * to_masked_encoded_input, dim=1)
                 span_repr[tmp_query_batch_idx, tmp_start_ids, tmp_end_ids, :] = attention_term
         
-        bsz, seq, hd = span_repr.size()
-        seq_t = torch.arange(seq)
-        seq_x = torch.broadcast_to(seq_t[None, None, ...], (bsz, seq, seq))
-        seq_y = torch.broadcast_to(seq_t[None, ..., None], (bsz, seq, seq))
-        mask = seq_x < seq_y
-        src_key_mask = mask.reshape(bsz, seq*seq)
+        bsz, seq, _, hd = span_repr.size()
+
+        if torch.isnan(span_repr).any():
+            print("nan in max-pooling")
 
         trans_repr = span_repr.reshape(bsz, seq * seq, hd)
         span_repr = self.trans(trans_repr.permute(1, 0, 2), attn_pattern=self.attn_schema).permute(1, 0, 2)
         span_repr = span_repr.reshape(bsz, seq, seq, hd)
 
         res = span_repr[query_batch_idx, start_ids, end_ids, :]
+
+        if torch.isnan(res).any():
+            print("nan in transformer")
+
         return res
 
     def get_output_dim(self):
@@ -404,7 +406,7 @@ class AttnSchemaSpanRepr(ComplexSpanRepr, nn.Module):
 def get_span_module(input_dim, method="mean", use_proj=False, proj_dim=256, attn_schema='none', nhead=2, nlayer=2):
     """Initializes the appropriate span representation class and returns the object.
     """
-    if attn_schema != 'none':
+    if attn_schema == 'none':
         if method == "mean":
             return MeanSpanRepr(input_dim, use_proj=use_proj, proj_dim=proj_dim)
         elif method == "max":

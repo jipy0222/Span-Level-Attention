@@ -12,21 +12,6 @@ class SpanModel(nn.Module):
                  attn_schema='none', nhead=2, nlayer=2, 
                  label_itos=None, num_spans=1, **kwargs):
         super().__init__()
-        # self.attn_schema = attn_schema
-        # if self.attn_schema != 'none':
-        #     self.attn_dim = attn_dim
-        #     self.nhead = nhead
-        #     self.nlayer = nlayer
-        #     if self.attn_schema == 'fullyconnect':
-        #         trans_encoder_layer = nn.TransformerEncoderLayer(d_model=self.attn_dim, nhead=self.tranheads)
-        #         trans_layernorm = nn.LayerNorm(self.attn_dim)
-        #         self.trans = nn.TransformerEncoder(trans_encoder_layer, num_layers=self.tranlayers, norm=trans_layernorm)
-        #     elif self.attn_schema in ['insidetoken', 'samehandt']:
-        #         trans_encoder_layer = myTransformerEncoderLayer(d_model=self.attn_dim, nhead=self.tranheads)
-        #         trans_layernorm = nn.LayerNorm(self.attn_dim)
-        #         self.trans = myTransformerEncoder(trans_encoder_layer, num_layers=self.tranlayers, norm=trans_layernorm)
-        #     else:
-        #         raise RuntimeError("Invalid span attention schema.")
         self.label_itos = label_itos  # a list saving the mapping from index to label, to output predictions
         self.set_encoder(encoder_dict)
         self.pool_methods = pool_methods
@@ -114,7 +99,14 @@ class SpanModel(nn.Module):
                 s_repr = torch.cat((s1_repr, s2_repr), dim=1)
             final_repr_list.append(s_repr)
         final_repr = torch.cat(final_repr_list, dim=1)
+        if torch.isnan(final_repr).any():
+            print("final_repr: ", final_repr)
+            print("batch: ", batch)
         pred = self.label_net(final_repr)
+        if torch.isnan(pred).any():
+            print("pred: ", pred)
+            print()
+            sys.exit()
         return pred
 
 
@@ -153,78 +145,10 @@ if __name__ == '__main__':
         span_start, span_end = span_indices[:, 0], span_indices[:, 1]
         span_repr = span_net(encoded_input, span_start, span_end, query_batch_idx)
         return span_repr
-
-    batch = {'subwords': {'bert': torch.tensor([[  101,  1130,  1924,   118,   118,   102],
-        [  101, 14153, 14153,   120,   119,   102],
-        [  101,  1448,  1160,   120,   118,   102],
-        [  101,  8790, 21205,   120,   119,   102],
-        [  101,  8790, 14153,   120,   119,   102],
-        [  101,  5749, 21205,   120,   119,   102],
-        [  101,   157,  4538,   120,   119,   102],
-        [  101,  1252,  4317,   120,   119,   102],
-        [  101,  1109, 14742,  4537,   119,   102],
-        [  101,  4428,  6586,  2069,   119,   102],
-        [  101,  1512,  6627,  3667,   119,   102],
-        [  101,  5749,   117,  3579,   119,   102],
-        [  101,  1542,  1127,  1841,   119,   102],
-        [  101, 19536,  3970,  6752, 14512,   102],
-        [  101,   185,   119,  4925,  1604,   102],
-        [  101,   185,   119,  4925,  1580,   102],
-        [  101,  1753,  1142,  1214,   119,   102],
-        [  101,  1188,  1110,  1999,   136,   102],
-        [  101,  1203,  1365,  1392,   131,   102],
-        [  101,  2748,   157, 16996, 10399,   102],
-        [  101,  1960,   118,  4714,  1715,   102],
-        [  101,  9294, 26835, 19162,   136,   102],
-        [  101, 26835,  1204, 14001,   119,   102],
-        [  101,  1119,  3024, 10898,  5035,   102],
-        [  101,  1103,  5291,  1398,   118,   102],
-        [  101, 15109,   118, 19753,  2240,   102],
-        [  101,  8158, 12120,  7609,  1161,   102],
-        [  101,  8158, 12120,  7609,  1161,   102],
-        [  101,  3840,  7641,  9379,  1358,   102],
-        [  101,   118, 10408,  8189,   118,   102],
-        [  101,  1448,  1314,  1159,   131,   102],
-        [  101,   123,   131,  3882, 14123,   102]], device='cuda:0')}, 
-        'subword_to_word_idx': {'bert': torch.tensor([[-1,  0,  1,  2,  2, -1],
-        [-1,  0,  1,  2,  2, -1],
-        [-1,  0,  1,  2,  2, -1],
-        [-1,  0,  1,  2,  2, -1],
-        [-1,  0,  1,  2,  2, -1],
-        [-1,  0,  1,  2,  2, -1],
-        [-1,  0,  0,  1,  1, -1],
-        [-1,  0,  1,  2,  2, -1],
-        [-1,  0,  1,  2,  3, -1],
-        [-1,  0,  1,  1,  2, -1],
-        [-1,  0,  1,  2,  3, -1],
-        [-1,  0,  1,  2,  3, -1],
-        [-1,  0,  1,  2,  3, -1],
-        [-1,  0,  0,  1,  2, -1],
-        [-1,  0,  0,  1,  1, -1],
-        [-1,  0,  0,  1,  1, -1],
-        [-1,  0,  1,  2,  3, -1],
-        [-1,  0,  1,  2,  3, -1],
-        [-1,  0,  1,  2,  3, -1],
-        [-1,  0,  1,  1,  1, -1],
-        [-1,  0,  1,  2,  3, -1],
-        [-1,  0,  1,  1,  2, -1],
-        [-1,  0,  0,  0,  1, -1],
-        [-1,  0,  1,  2,  3, -1],
-        [-1,  0,  1,  2,  2, -1],
-        [-1,  0,  1,  2,  2, -1],
-        [-1,  0,  1,  1,  1, -1],
-        [-1,  0,  1,  1,  1, -1],
-        [-1,  0,  0,  0,  0, -1],
-        [-1,  0,  1,  2,  3, -1],
-        [-1,  0,  1,  2,  3, -1],
-        [-1,  0,  0,  0,  1, -1]], device='cuda:0')}, 
-        'spans1': {'bert': [[[2, 2]], [[2, 2], [1, 1]], [[2, 2], [1, 1]], [[2, 2]], [[2, 2]], [[2, 2]], [[1, 2]], [[2, 2]], [[1, 4]], [[2, 3]], [[1, 1]], [[3, 3]], [[1, 1]], [[4, 4]], [[3, 4]], [[3, 4]], [[2, 3]], [[3, 3]], [[1, 4]], [[1, 4]], [[1, 1]], [[2, 3]], [[1, 3]], [[3, 3]], [[2, 2]], [[3, 4], [1, 1]], [[1, 4]], [[1, 4]], [[1, 4]], [[1, 4]], [[1, 1]], [[1, 4]]]}, 
-        'spans2': {}, 
-        'labels': [[[7]], [[8], [8]], [[3], [3]], [[8]], [[8]], [[8]], [[8]], [[8]], [[1]], [[0]], [[3]], [[8]], [[3]], [[6]], [[3]], [[3]], [[7]], [[6]], [[6]], [[8]], [[3]], [[6]], [[6]], [[0]], [[8]], [[0], [6]], [[8]], [[8]], [[8]], [[8]], [[3]], [[12]]], 
-        'seq_len': torch.tensor([3, 3, 3, 3, 3, 3, 2, 3, 4, 3, 4, 4, 4, 3, 2, 2, 4, 4, 4, 2, 4, 3, 2, 4,
-        3, 3, 2, 2, 1, 4, 4, 2], device='cuda:0')}
-
-# torch.Size([32, 6])
+    
+    batch = {'subwords': {'bert': torch.tensor([[  101,  1760, 10031, 15852,   124,   131,  1275,  9952,  1163,   102]],device='cuda:0')}, 
+             'subword_to_word_idx': {'bert': torch.tensor([[-1,  0,  0,  0,  1,  1,  1,  1,  2, -1]],  device='cuda:0')}, 
+             'spans1': {'bert': [[[4, 7]]]}, 'spans2': {}, 'labels': [[[12]]], 'seq_len': torch.tensor([3], device='cuda:0')}
 
     subwords = batch['subwords']
     spans_1 = batch['spans1']
@@ -247,8 +171,8 @@ if __name__ == '__main__':
     encoder_key = 'bert'
     span_net = get_span_module(method='max',
                             input_dim=768,
-                            use_proj=False,
-                            proj_dim=256,
+                            use_proj=True,
+                            proj_dim=6,
                             attn_schema='insidetoken',
                             nhead=2,
                             nlayer=2).cuda()
@@ -267,6 +191,8 @@ if __name__ == '__main__':
 
     print("s1_repr: ", s1_repr)
     print("s1_repr_size: ", s1_repr.size())
+
+    print("have nan in final: ", torch.isnan(s1_repr).any())
 
     s_repr = s1_repr
     final_repr_list.append(s_repr)

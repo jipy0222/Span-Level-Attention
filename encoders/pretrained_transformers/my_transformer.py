@@ -328,7 +328,7 @@ def mymulti_head_attention_forward_grouppadding(
 
     # initial complete attention output
     seq = int(math.sqrt(tgt_len))
-    complete_attn_output = torch.empty([bsz, seq, seq, embed_dim], device=query.device)
+    complete_attn_output = torch.zeros([bsz, seq, seq, embed_dim], device=query.device)
 
     #
     # compute in-projection
@@ -405,8 +405,8 @@ def mymulti_head_attention_forward_grouppadding(
             # print("filling_mask", filling_mask)
 
             # initial complete q, k, v
-            complete_k = torch.empty([total_span, numofpattern, embed_dim], device=q.device)
-            complete_v = torch.empty([total_span, numofpattern, embed_dim], device=q.device)
+            complete_k = torch.zeros([total_span, numofpattern, embed_dim], device=q.device)
+            complete_v = torch.zeros([total_span, numofpattern, embed_dim], device=q.device)
             complete_key_padding_mask = torch.ones([total_span, numofpattern], device=q.device) > 0
 
             # construct complete_q
@@ -476,12 +476,21 @@ def mymulti_head_attention_forward_grouppadding(
 
             # (deep breath) calculate attention and out projection
             attn_output, attn_output_weights = _scaled_dot_product_attention(complete_q, complete_k, complete_v, attn_mask, dropout_p)
+            # print("have nan in before contiguous attn_output: ", torch.isnan(new_k_repr).any())
             attn_output = attn_output.transpose(0, 1).contiguous().view(tgt_len * bsz, embed_dim)
+            # print("have nan in before linear attn_output: ", torch.isnan(new_k_repr).any())
             attn_output = F.linear(attn_output, out_proj_weight, out_proj_bias)
             attn_output = attn_output.view(tgt_len, bsz, attn_output.size(1))
 
             # do reverse and fill attn_ouput to complete_attn_ouput
             attn_output = attn_output.transpose(0, 1).reshape(-1, hd)
+
+            # print("have nan in attn_output: ", torch.isnan(attn_output).any())
+            # if torch.isnan(attn_output).any():
+            #     print("nan in q?", torch.isnan(complete_q).any())
+            #     print("nan in k?", torch.isnan(new_k_repr).any())
+            #     print("nan in v?", torch.isnan(new_v_repr).any())
+
             lenmask_attn = lenmask.reshape(ori_bsz, seq, seq)
             complete_attn_output[~lenmask_attn] = attn_output
 
@@ -508,6 +517,9 @@ def mymulti_head_attention_forward_grouppadding(
             lenmask = (lenmask > 0).reshape(bsz, seq * seq)
             pattern_mask_legal = pattern_mask[~lenmask].reshape(bsz, int(total_span / bsz), seq * seq)
             # print("pattern_mask_legal: ", pattern_mask_legal)
+            # for b in range(bsz):
+            #     for s in range(pattern_mask_legal.size()[1]):
+            #         print("b, s:", b, s, pattern_mask_legal[b, s, :])
 
             temp = torch.broadcast_to(tempfilling[None, ..., None], (bsz, seq*seq, numofpattern))
             temp = temp[~lenmask].reshape(total_span, numofpattern)
@@ -517,8 +529,8 @@ def mymulti_head_attention_forward_grouppadding(
             # print("filling_mask: ", filling_mask)
 
             # initial complete q, k, v
-            complete_k = torch.empty([total_span, numofpattern, embed_dim], device=q.device)
-            complete_v = torch.empty([total_span, numofpattern, embed_dim], device=q.device)
+            complete_k = torch.zeros([total_span, numofpattern, embed_dim], device=q.device)
+            complete_v = torch.zeros([total_span, numofpattern, embed_dim], device=q.device)
             complete_key_padding_mask = torch.ones([total_span, numofpattern], device=q.device) > 0
 
             # construct complete_q
@@ -588,12 +600,21 @@ def mymulti_head_attention_forward_grouppadding(
 
             # (deep breath) calculate attention and out projection
             attn_output, attn_output_weights = _scaled_dot_product_attention(complete_q, complete_k, complete_v, attn_mask, dropout_p)
+            # print("have nan in before contiguous attn_output: ", torch.isnan(attn_output).any())
             attn_output = attn_output.transpose(0, 1).contiguous().view(tgt_len * bsz, embed_dim)
+            # print("have nan in before linear attn_output: ", torch.isnan(attn_output).any())
             attn_output = F.linear(attn_output, out_proj_weight, out_proj_bias)
             attn_output = attn_output.view(tgt_len, bsz, attn_output.size(1))
 
             # do reverse and fill attn_ouput to complete_attn_ouput
             attn_output = attn_output.transpose(0, 1).reshape(-1, hd)
+
+            # print("have nan in attn_ouput: ", torch.isnan(attn_output).any())
+            # if torch.isnan(attn_output).any():
+            #     print("nan in q?", torch.isnan(complete_q).any())
+            #     print("nan in k?", torch.isnan(new_k_repr).any())
+            #     print("nan in v?", torch.isnan(new_v_repr).any())
+
             lenmask_attn = lenmask.reshape(ori_bsz, seq, seq)
             complete_attn_output[~lenmask_attn] = attn_output
 
@@ -661,8 +682,8 @@ def mymulti_head_attention_forward_grouppadding(
             # print("filling_mask", filling_mask)
 
             # initial complete q, k, v
-            complete_k = torch.empty([total_span, numofpattern, embed_dim], device=q.device)
-            complete_v = torch.empty([total_span, numofpattern, embed_dim], device=q.device).to(q.device)
+            complete_k = torch.zeros([total_span, numofpattern, embed_dim], device=q.device)
+            complete_v = torch.zeros([total_span, numofpattern, embed_dim], device=q.device).to(q.device)
             complete_key_padding_mask = torch.ones([total_span, numofpattern], device=q.device) > 0
 
             # construct complete_q
@@ -773,8 +794,8 @@ def mymulti_head_attention_forward_grouppadding(
             # print("filling_mask", filling_mask)
 
             # initial complete q, k, v
-            complete_k = torch.empty([total_span, numofpattern, embed_dim], device=q.device)
-            complete_v = torch.empty([total_span, numofpattern, embed_dim], device=q.device)
+            complete_k = torch.zeros([total_span, numofpattern, embed_dim], device=q.device)
+            complete_v = torch.zeros([total_span, numofpattern, embed_dim], device=q.device)
             complete_key_padding_mask = torch.ones([total_span, numofpattern], device=q.device) > 0
 
             # construct complete_q
@@ -917,8 +938,8 @@ def mymulti_head_attention_forward_grouppadding(
             # print("filling_mask", filling_mask)
 
             # initial complete q, k, v
-            complete_k = torch.empty([total_span, numofpattern, embed_dim], device=q.device)
-            complete_v = torch.empty([total_span, numofpattern, embed_dim], device=q.device)
+            complete_k = torch.zeros([total_span, numofpattern, embed_dim], device=q.device)
+            complete_v = torch.zeros([total_span, numofpattern, embed_dim], device=q.device)
             complete_key_padding_mask = torch.ones([total_span, numofpattern], device=q.device) > 0
             
             # construct complete_q
@@ -1030,8 +1051,8 @@ def mymulti_head_attention_forward_grouppadding(
             # print("filling_mask", filling_mask)
 
             # initial complete q, k, v
-            complete_k = torch.empty([total_span, numofpattern, embed_dim], device=q.device)
-            complete_v = torch.empty([total_span, numofpattern, embed_dim], device=q.device)
+            complete_k = torch.zeros([total_span, numofpattern, embed_dim], device=q.device)
+            complete_v = torch.zeros([total_span, numofpattern, embed_dim], device=q.device)
             complete_key_padding_mask = torch.ones([total_span, numofpattern], device=q.device) > 0
             
             # construct complete_q
@@ -1171,8 +1192,8 @@ def mymulti_head_attention_forward_grouppadding(
             # print("filling_mask", filling_mask)
 
             # initial complete q, k, v
-            complete_k = torch.empty([total_span, numofpattern, embed_dim], device=q.device)
-            complete_v = torch.empty([total_span, numofpattern, embed_dim], device=q.device)
+            complete_k = torch.zeros([total_span, numofpattern, embed_dim], device=q.device)
+            complete_v = torch.zeros([total_span, numofpattern, embed_dim], device=q.device)
             complete_key_padding_mask = torch.ones([total_span, numofpattern], device=q.device) > 0
             
             # construct complete_q
@@ -1283,8 +1304,8 @@ def mymulti_head_attention_forward_grouppadding(
             # print("filling_mask", filling_mask)
 
             # initial complete q, k, v
-            complete_k = torch.empty([total_span, numofpattern, embed_dim], device=q.device)
-            complete_v = torch.empty([total_span, numofpattern, embed_dim], device=q.device)
+            complete_k = torch.zeros([total_span, numofpattern, embed_dim], device=q.device)
+            complete_v = torch.zeros([total_span, numofpattern, embed_dim], device=q.device)
             complete_key_padding_mask = torch.ones([total_span, numofpattern], device=q.device) > 0
 
             # construct complete_q
@@ -1386,8 +1407,8 @@ def mymulti_head_attention_forward_grouppadding(
         # all true in filling_mask
 
         # initial complete q, k, v
-        complete_k = torch.empty([total_span, numofpattern, embed_dim], device=q.device).to(q.device)
-        complete_v = torch.empty([total_span, numofpattern, embed_dim], device=q.device).to(q.device)
+        complete_k = torch.zeros([total_span, numofpattern, embed_dim], device=q.device)
+        complete_v = torch.zeros([total_span, numofpattern, embed_dim], device=q.device)
         complete_key_padding_mask = torch.ones([total_span, numofpattern], device=q.device) > 0
 
         # construct complete_q

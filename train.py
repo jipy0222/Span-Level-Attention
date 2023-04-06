@@ -133,6 +133,7 @@ def create_parser():
     parser.add_argument('-epochs', type=int, default=20)
     parser.add_argument('-optimizer', type=str, default='Adam')
     parser.add_argument('-learning_rate', type=float, default=5e-4)
+    parser.add_argument("-attn_lr", type=float, default=2e-4)
     parser.add_argument('-log_step', type=int, default=50)
     parser.add_argument('-eval_step', type=int, default=500)
     parser.add_argument('-seed', type=int, default=1111)
@@ -154,9 +155,9 @@ def create_parser():
 
     # span attention
     parser.add_argument('-attn_schema', type=str, default='none', 
-                        choice=('none', 'fullyconnect', 'insidetoken', 'samehandt'))
-    parser.add_argument("--nhead", type=int, default=2)
-    parser.add_argument("--nlayer", type=int, default=2)
+                        choices=('none', 'fullyconnect', 'insidetoken', 'samehandt'))
+    parser.add_argument("-nhead", type=int, default=2)
+    parser.add_argument("-nlayer", type=int, default=2)
 
     parser.add_argument('-fine_tune', action='store_true', default=False)
 
@@ -316,13 +317,20 @@ def main():
 
         logger.info('Trainable parameters: ')
         params = list()
+        attn_params = list()
         names = list()
         for name, param in list(model.named_parameters()):
             if param.requires_grad:
-                params.append(param)
+                if 'trans' not in name:
+                    params.append(param)
+                    logger.info(f"common, {name}: {param.data.size()}")
+                else:
+                    attn_params.append(param)
+                    logger.info(f"trans, {name}: {param.data.size()}")
                 names.append(name)
-                logger.info(f"{name}: {param.data.size()}")
-        optimizer = getattr(torch.optim, args.optimizer)(params, lr=args.learning_rate)
+                # logger.info(f"{name}: {param.data.size()}")
+        optimizer = getattr(torch.optim, args.optimizer)([{'params': params, 'lr': args.learning_rate}, 
+                                                          {'params': attn_params, 'lr': args.attn_lr}])
     # initialize best model info, and lr controller
     best_f1 = 0
     best_model = None
@@ -432,10 +440,8 @@ def main():
                         f'Re-initialize learning rate to '
                         f'{optimizer.param_groups[0]["lr"] / 2.0:.8f}'
                     )
-                    optimizer = getattr(torch.optim, args.optimizer)(
-                        params,
-                        lr=optimizer.param_groups[0]['lr'] / 2.0
-                    )
+                    optimizer = getattr(torch.optim, args.optimizer)([{'params': params, 'lr': optimizer.param_groups[0]['lr'] / 2.0}, 
+                                                                      {'params': attn_params, 'lr': optimizer.param_groups[1]['lr'] / 2.0}])
                 # save checkpoint
                 torch.save({
                     'model': model.state_dict(),
