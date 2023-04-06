@@ -149,9 +149,14 @@ def create_parser():
     parser.add_argument('-uncased', action='store_false', dest='cased')
 
     # pool_method
-
     parser.add_argument('-pool_methods', type=str, nargs="*", default='max',
                         choices=('mean', 'max', 'diff_sum', 'endpoint', 'attn'))
+
+    # span attention
+    parser.add_argument('-attn_schema', type=str, default='none', 
+                        choice=('none', 'fullyconnect', 'insidetoken', 'samehandt'))
+    parser.add_argument("--nhead", type=int, default=2)
+    parser.add_argument("--nlayer", type=int, default=2)
 
     parser.add_argument('-fine_tune', action='store_true', default=False)
 
@@ -292,7 +297,8 @@ def main():
     # initialize model
     logger.info('Initializing models.')
     model = SpanModel(
-        encoder_dict, span_dim=args.span_dim, pool_methods=args.pool_methods, use_proj=args.use_proj,
+        encoder_dict, span_dim=args.span_dim, pool_methods=args.pool_methods, use_proj=args.use_proj, 
+        attn_schema=args.attn_schema, nhead=args.nhead, nlayer=args.nlayer, 
         label_itos={value: key for key, value in SpanDataset.label_dict.items()},
         num_spans=num_spans
     )

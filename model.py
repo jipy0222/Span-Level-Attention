@@ -8,15 +8,29 @@ from encoders.pretrained_transformers.span_reprs import get_span_module
 
 
 class SpanModel(nn.Module):
-    def __init__(self, encoder_dict, span_dim=256, pool_methods=None, use_proj=False, label_itos=None, num_spans=1,
-                 **kwargs):
+    def __init__(self, encoder_dict, span_dim=256, pool_methods=None, use_proj=False, 
+                 attn_schema='none', nhead=2, nlayer=2, 
+                 label_itos=None, num_spans=1, **kwargs):
         super().__init__()
+        # self.attn_schema = attn_schema
+        # if self.attn_schema != 'none':
+        #     self.attn_dim = attn_dim
+        #     self.nhead = nhead
+        #     self.nlayer = nlayer
+        #     if self.attn_schema == 'fullyconnect':
+        #         trans_encoder_layer = nn.TransformerEncoderLayer(d_model=self.attn_dim, nhead=self.tranheads)
+        #         trans_layernorm = nn.LayerNorm(self.attn_dim)
+        #         self.trans = nn.TransformerEncoder(trans_encoder_layer, num_layers=self.tranlayers, norm=trans_layernorm)
+        #     elif self.attn_schema in ['insidetoken', 'samehandt']:
+        #         trans_encoder_layer = myTransformerEncoderLayer(d_model=self.attn_dim, nhead=self.tranheads)
+        #         trans_layernorm = nn.LayerNorm(self.attn_dim)
+        #         self.trans = myTransformerEncoder(trans_encoder_layer, num_layers=self.tranlayers, norm=trans_layernorm)
+        #     else:
+        #         raise RuntimeError("Invalid span attention schema.")
         self.label_itos = label_itos  # a list saving the mapping from index to label, to output predictions
         self.set_encoder(encoder_dict)
         self.pool_methods = pool_methods
         self.span_nets = ModuleDict()
-        if num_spans == 2:
-            self.span_nets2 = ModuleDict()
         self.pooled_dim_map = {}
 
         self.p2e_map = _get_p2e_map(self.encoder_key_lst, self.pool_methods)
@@ -28,12 +42,10 @@ class SpanModel(nn.Module):
             self.span_nets[pool_method] = get_span_module(method=pool_method,
                                                             input_dim=input_dim,
                                                             use_proj=use_proj,
-                                                            proj_dim=span_dim)
-            if num_spans == 2:
-                self.span_nets2[pool_method] = get_span_module(method=pool_method,
-                                                            input_dim=input_dim,
-                                                            use_proj=use_proj,
-                                                            proj_dim=span_dim)
+                                                            proj_dim=span_dim,
+                                                            attn_schema=attn_schema,
+                                                            nhead=nhead,
+                                                            nlayer=nlayer)
 
             self.pooled_dim_map[pool_method] = self.span_nets[pool_method].get_output_dim()
 
@@ -91,8 +103,6 @@ class SpanModel(nn.Module):
         for pool_method in self.pool_methods:
             encoder_key = self.p2e_map[pool_method]
             span_net = self.span_nets[pool_method]
-            if self.num_spans == 2:
-                span_net2 = self.span_nets2[pool_method]
             span_encoder_input = token_encoder_output_dict[encoder_key]
 
             spans_idx_1 = _process_spans(spans_1[encoder_key])
@@ -100,7 +110,7 @@ class SpanModel(nn.Module):
             s_repr = s1_repr
             if self.num_spans == 2:
                 spans_idx_2 = _process_spans(spans_2[encoder_key])
-                s2_repr = self.calc_span_repr(span_net2, span_encoder_input, spans_idx_2, query_batch_idx)
+                s2_repr = self.calc_span_repr(span_net, span_encoder_input, spans_idx_2, query_batch_idx)
                 s_repr = torch.cat((s1_repr, s2_repr), dim=1)
             final_repr_list.append(s_repr)
         final_repr = torch.cat(final_repr_list, dim=1)
@@ -235,18 +245,13 @@ if __name__ == '__main__':
     final_repr_list = []
     # Collect pooled span repr.
     encoder_key = 'bert'
-    span_net = get_span_module(method='attn',
+    span_net = get_span_module(method='max',
                             input_dim=768,
                             use_proj=False,
-                            proj_dim=256).cuda()
-    print("orig_weight: ", span_net.attention_params)
-    my_span_net = get_span_module(method='myattn',
-                            input_dim=768,
-                            use_proj=False,
-                            proj_dim=256).cuda()
-    my_span_net.attention_params = span_net.attention_params
-    print("new_weight: ", my_span_net.attention_params)
-    print(span_net.attention_params == my_span_net.attention_params)
+                            proj_dim=256,
+                            attn_schema='insidetoken',
+                            nhead=2,
+                            nlayer=2).cuda()
 
     span_encoder_input = token_encoder_output_dict[encoder_key]
 
@@ -259,18 +264,11 @@ if __name__ == '__main__':
     print("query_batch_idx_len: ", len(query_batch_idx))
 
     s1_repr = calc_span_repr(span_net, span_encoder_input, spans_idx_1, query_batch_idx)
-    s1_repr_new = calc_span_repr(my_span_net, span_encoder_input, spans_idx_1, query_batch_idx)
 
     print("s1_repr: ", s1_repr)
     print("s1_repr_size: ", s1_repr.size())
-    print("s1_repr_new: ", s1_repr_new)
-    print("s1_repr_new_size: ", s1_repr_new.size())
 
-    print(s1_repr == s1_repr_new)
-        
     s_repr = s1_repr
     final_repr_list.append(s_repr)
     
     final_repr = torch.cat(final_repr_list, dim=1)
-
-    
