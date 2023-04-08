@@ -4,7 +4,7 @@ import torch
 import torch.nn as nn
 from abc import ABC, abstractmethod
 from encoders.pretrained_transformers.utils import get_span_mask
-from encoders.pretrained_transformers.my_transformer import myTransformerEncoderLayer, myTransformerEncoder
+from encoders.pretrained_transformers.new_transformer import myTransformerEncoderLayer, myTransformerEncoder
 
 
 class SpanRepr(ABC, nn.Module):

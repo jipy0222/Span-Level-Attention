@@ -155,7 +155,7 @@ def create_parser():
 
     # span attention
     parser.add_argument('-attn_schema', type=str, default='none', 
-                        choices=('none', 'fullyconnect', 'insidetoken', 'samehandt'))
+                        choices=('none', 'fullyconnect', 'insidetoken', 'samehandt', 'both'))
     parser.add_argument("-nhead", type=int, default=2)
     parser.add_argument("-nlayer", type=int, default=2)
 
@@ -197,7 +197,7 @@ def main():
     set_seed(args.seed)
     if args.task in ('ctl', 'nel'):
         num_spans = 1
-    elif args.task in ('coref', 'srl'):
+    elif args.task in ('coref', 'src'):
         num_spans = 2
     else:
         raise NotImplementedError()
