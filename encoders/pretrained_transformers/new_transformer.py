@@ -227,39 +227,24 @@ def grouppadding_subprocess(q_repr, k_repr, v_repr, lenlist, pattern_mask, tempf
     
     bsz, tgt_len, embed_dim = q_repr.shape
     seq = int(math.sqrt(tgt_len))
-    siblingflag = False
-    if attn_pattern == 'insidetoken':
-        numofpattern = lenlist[-1]
-    elif attn_pattern == 'samehandt':
-        numofpattern = seq + lenlist[-1] - 1
-    elif attn_pattern == 'subspan':
-        numofpattern = int((1+lenlist[-1])*lenlist[-1] / 2)
-    elif attn_pattern == 'sibling':
-        numofpattern = seq - lenlist[0]
-        if len(lenlist) == 1 and lenlist[0] == seq:
-            siblingflag = True
-            numofpattern = seq*seq
     lenmask = torch.ones([bsz, seq, seq], device=q_repr.device)
     total_span = 0
     for item in lenlist:
         total_span += (seq - item + 1)*bsz
         lenmask[:, range(seq - item + 1), range(item - 1, seq)] = 0
     lenmask = (lenmask > 0).reshape(bsz, seq * seq)
-    if not siblingflag:
-        pattern_mask_legal = pattern_mask[~lenmask].reshape(bsz, int(total_span / bsz), seq * seq)
-    else:
-        pattern_mask_legal = torch.zeros((bsz, int(total_span / bsz), seq*seq), device=pattern_mask.device) > 0
+    pattern_mask_legal = pattern_mask[~lenmask].reshape(bsz, int(total_span / bsz), seq * seq)
+
     # print("pattern_mask_legal: ", pattern_mask_legal)
     # print("pattern_maks_legal_shape: ", pattern_mask_legal.shape)
 
-    if not siblingflag:
-        temp = torch.broadcast_to(tempfilling[None, ..., None], (bsz, seq*seq, numofpattern))
-        temp = temp[~lenmask].reshape(total_span, numofpattern)
-        temp2 = torch.arange(start=1, end=numofpattern+1, step=1).to(q_repr.device)
-        temp2 = torch.broadcast_to(temp2[None, ...], (total_span, numofpattern))
-        filling_mask = (temp-temp2) >= 0
-    else:
-        filling_mask = torch.zeros([total_span, numofpattern], device=tempfilling.device) == 0
+    numofpattern = torch.sum(~pattern_mask_legal, dim=2).max().item()
+    temp = torch.broadcast_to(tempfilling[None, ..., None], (bsz, seq*seq, numofpattern))
+    temp = temp[~lenmask].reshape(total_span, numofpattern)
+    temp2 = torch.arange(start=1, end=numofpattern+1, step=1).to(q_repr.device)
+    temp2 = torch.broadcast_to(temp2[None, ...], (total_span, numofpattern))
+    filling_mask = (temp-temp2) >= 0
+
     # print("filling_mask: ", filling_mask)
     # print("filling_mask_shape: ", filling_mask.shape)
 
@@ -435,7 +420,6 @@ def mymulti_head_attention_forward_grouppadding(
 
     # set up shape vars
     tgt_len, bsz, embed_dim = query.shape
-    source_len, _, _ = key.shape
     assert embed_dim == embed_dim_to_check, \
         f"was expecting embedding dimension of {embed_dim_to_check}, but got {embed_dim}"
     head_dim = embed_dim // num_heads
@@ -477,220 +461,95 @@ def mymulti_head_attention_forward_grouppadding(
     # print("k_size", k.shape)
     # print("v_size", v.shape)
 
-    if attn_pattern == "insidetoken":
+    t = torch.arange(seq).repeat(seq).to(q.device)
+    t1 = torch.broadcast_to(t[None, ...], (seq * seq, seq * seq))
+    t2 = torch.broadcast_to(t[..., None], (seq * seq, seq * seq))
+    h = torch.arange(seq).to(q.device)
+    h = torch.broadcast_to(h[..., None], (seq, seq)).reshape(-1)
+    h1 = torch.broadcast_to(h[None, ...], (seq * seq, seq * seq))
+    h2 = torch.broadcast_to(h[..., None], (seq * seq, seq * seq))
+
+    pattern_mask = torch.zeros([seq * seq, seq * seq], device=q.device) == 0
+
+    for pattern in attn_pattern:
+
+        if pattern == "insidetoken":
+
+            tmp_pattern_mask = ~((t1 <= t2) & (h1 >= h2))
+            c = torch.tensor([1]).repeat(seq).to(q.device)
+            c = torch.diag_embed(c).reshape(seq * seq)
+            c = torch.broadcast_to(c[None, ...], (seq * seq, seq * seq)) == 0
+            tmp_pattern_mask = (c | tmp_pattern_mask)
+
+            # print("tmp_pattern_mask", tmp_pattern_mask)
+            # print("tmp_pattern_mask_shape", tmp_pattern_mask.shape)
+
+        elif pattern == "samehandt":
+
+            tmp_pattern_mask = ~( ((t1 == t2) & (h1 <= t2)) | ((h1 == h2) & (t1 >= h2)) )
+
+            # print("tmp_pattern_mask", tmp_pattern_mask)
+            # print("tmp_pattern_mask_shape", tmp_pattern_mask.shape)
         
-        t = torch.arange(seq).repeat(seq).to(q.device)
-        t1 = torch.broadcast_to(t[None, ...], (seq * seq, seq * seq))
-        t2 = torch.broadcast_to(t[..., None], (seq * seq, seq * seq))
-        h = torch.arange(seq).to(q.device)
-        h = torch.broadcast_to(h[..., None], (seq, seq)).reshape(-1)
-        h1 = torch.broadcast_to(h[None, ...], (seq * seq, seq * seq))
-        h2 = torch.broadcast_to(h[..., None], (seq * seq, seq * seq))
-        tempfilling = t - h + 1
-        pattern_mask = ~((t1 <= t2) & (h1 >= h2))
-        c = torch.ones(seq * seq).to(q.device)
-        for i in range(0, seq * seq, seq + 1):
-            c[i] = 0
-        oric = torch.broadcast_to(c[None, ...], (seq * seq, seq * seq)) > 0
-        pattern_mask = (oric | pattern_mask)
-        pattern_mask = torch.broadcast_to(pattern_mask[None, ...], (bsz, seq * seq, seq * seq))
+        elif pattern == 'sibling':
 
-        # print("pattern_mask", pattern_mask)
-        # print("pattern_mask_shape", pattern_mask.shape)
-
-        q_repr = q.transpose(0, 1)
-        k_repr = k.transpose(0, 1)
-        v_repr = v.transpose(0, 1)
-
-        templength = 1
-        for i in range(1, seq + 1, 2):
-            if i >= seq / 2:
-                templength = i
-                break
+            tmp_pattern_mask = ~(((h1 == t2 + 1) | (t1 == h2 - 1)) & (h1 <= t1))
+            c = torch.tensor([1]).repeat(seq).to(q.device)
+            c = torch.diag_embed(c).reshape(seq * seq) == 0
+            tmp_pattern_mask[seq-1, :] = c
             
-            lenlist = [i, i+1]
-            # print("lenlist: ", lenlist)
-
-            attn_output, lenmask_attn = grouppadding_subprocess(q_repr, k_repr, v_repr, lenlist, pattern_mask, tempfilling, attn_pattern, 
-                            num_heads, head_dim, dropout_p, out_proj_weight, out_proj_bias)
-            complete_attn_output[~lenmask_attn] = attn_output
-
-        for i in range(templength, seq + 1, 4):
-            if (i + 3) >= seq:
-                lenlist = []
-                for m in range(i, seq + 1):
-                    lenlist.append(m)
-            else:
-                lenlist = [i, i + 1, i + 2, i + 3]
-            # print("lenlist: ", lenlist)
-
-            attn_output, lenmask_attn = grouppadding_subprocess(q_repr, k_repr, v_repr, lenlist, pattern_mask, tempfilling, attn_pattern, 
-                            num_heads, head_dim, dropout_p, out_proj_weight, out_proj_bias)
-            complete_attn_output[~lenmask_attn] = attn_output
-
-        complete_attn_output = complete_attn_output.reshape(bsz, seq*seq, embed_dim).transpose(0, 1)
-
-    elif attn_pattern == 'samehandt':
+            # print("tmp_pattern_mask", tmp_pattern_mask)
+            # print("tmp_pattern_mask_shape", tmp_pattern_mask.shape)
         
-        t = torch.arange(seq).repeat(seq).to(q.device)
-        t1 = torch.broadcast_to(t[None, ...], (seq * seq, seq * seq))
-        t2 = torch.broadcast_to(t[..., None], (seq * seq, seq * seq))
-        h = torch.arange(seq).to(q.device)
-        h = torch.broadcast_to(h[..., None], (seq, seq)).reshape(-1)
-        h1 = torch.broadcast_to(h[None, ...], (seq * seq, seq * seq))
-        h2 = torch.broadcast_to(h[..., None], (seq * seq, seq * seq))
-        tempfilling = t - h + 1
-        tempfilling = seq + tempfilling - 1
-        pattern_mask1 = (t1 == t2) & (h1 <= t2)
-        pattern_mask2 = (h1 == h2) & (t1 >= h2)
-        pattern_mask = ~(pattern_mask1 | pattern_mask2)
-        pattern_mask = torch.broadcast_to(pattern_mask[None, ...], (bsz, seq * seq, seq * seq))
+        elif pattern == 'alltoken':
 
-        # print("pattern_mask", pattern_mask)
-        # print("pattern_mask_shape", pattern_mask.shape)
+            c = torch.tensor([1]).repeat(seq).to(q.device)
+            tmp_pattern_mask = torch.diag_embed(c).reshape(seq * seq)
+            tmp_pattern_mask = torch.broadcast_to(tmp_pattern_mask[None, ...], (seq * seq, seq * seq)) == 0
 
-        q_repr = q.transpose(0, 1)
-        k_repr = k.transpose(0, 1)
-        v_repr = v.transpose(0, 1)
+            # print("tmp_pattern_mask", tmp_pattern_mask)
+            # print("tmp_pattern_mask_shape", tmp_pattern_mask.shape)
 
-        templength = 1
-        for i in range(1, seq + 1, 2):
-            if i >= seq / 2:
-                templength = i
-                break
+        else:
+            raise RuntimeError("Unknown attention pattern: {}".format(pattern))
+        
+        pattern_mask = pattern_mask & tmp_pattern_mask
+    
+    tempfilling = torch.sum(~pattern_mask, dim=1)
+    pattern_mask = torch.broadcast_to(pattern_mask[None, ...], (bsz, seq * seq, seq * seq))
+
+    q_repr = q.transpose(0, 1)
+    k_repr = k.transpose(0, 1)
+    v_repr = v.transpose(0, 1)
+
+    templength = 1
+    for i in range(1, seq + 1, 2):
+        if i >= seq / 2:
+            templength = i
+            break
             
-            lenlist = [i, i+1]
-            # print("lenlist", lenlist)
-            
-            attn_output, lenmask_attn = grouppadding_subprocess(q_repr, k_repr, v_repr, lenlist, pattern_mask, tempfilling, attn_pattern, 
-                            num_heads, head_dim, dropout_p, out_proj_weight, out_proj_bias)
-            complete_attn_output[~lenmask_attn] = attn_output
-
-        for i in range(templength, seq + 1, 4):
-            if (i + 3) >= seq:
-                lenlist = []
-                for m in range(i, seq + 1):
-                    lenlist.append(m)
-            else:
-                lenlist = [i, i + 1, i + 2, i + 3]
-            # print("lenlist", lenlist)
-
-            attn_output, lenmask_attn = grouppadding_subprocess(q_repr, k_repr, v_repr, lenlist, pattern_mask, tempfilling, attn_pattern, 
-                            num_heads, head_dim, dropout_p, out_proj_weight, out_proj_bias)
-            complete_attn_output[~lenmask_attn] = attn_output
-
-        complete_attn_output = complete_attn_output.reshape(bsz, seq*seq, embed_dim).transpose(0, 1)
-
-    elif attn_pattern == 'subspan':
-
-        t = torch.arange(seq).repeat(seq).to(q.device)
-        t1 = torch.broadcast_to(t[None, ...], (seq * seq, seq * seq))
-        t2 = torch.broadcast_to(t[..., None], (seq * seq, seq * seq))
-        h = torch.arange(seq).to(q.device)
-        h = torch.broadcast_to(h[..., None], (seq, seq)).reshape(-1)
-        h1 = torch.broadcast_to(h[None, ...], (seq * seq, seq * seq))
-        h2 = torch.broadcast_to(h[..., None], (seq * seq, seq * seq))
-        tempfilling = t - h + 1
-        tempfilling = (tempfilling+1)*tempfilling / 2
-        pattern_mask = ~((t1 <= t2) & (h1 >= h2) & (h1 <= t1))
-        pattern_mask = torch.broadcast_to(pattern_mask[None, ...], (bsz, seq * seq, seq * seq))
-
-        # print("pattern_mask", pattern_mask)
-        # print("pattern_mask_shape", pattern_mask.shape)
-
-        q_repr = q.transpose(0, 1)
-        k_repr = k.transpose(0, 1)
-        v_repr = v.transpose(0, 1)
-
-        templength = 1
-        for i in range(1, seq + 1, 4):
-            if i + 3 >= seq / 2:
-                templength = i
-                break
-            
-            lenlist = [i, i+1, i+2, i+3]
-            # print("lenlist: ", lenlist)
-
-            attn_output, lenmask_attn = grouppadding_subprocess(q_repr, k_repr, v_repr, lenlist, pattern_mask, tempfilling, attn_pattern, 
-                                num_heads, head_dim, dropout_p, out_proj_weight, out_proj_bias)
-            complete_attn_output[~lenmask_attn] = attn_output
-
-        for i in range(templength, seq + 1, 2):
-            if (i + 1) >= seq:
-                lenlist = []
-                for m in range(i, seq + 1):
-                    lenlist.append(m)
-            else:
-                lenlist = [i, i + 1]
-            # print("lenlist: ", lenlist)
-                
-            attn_output, lenmask_attn = grouppadding_subprocess(q_repr, k_repr, v_repr, lenlist, pattern_mask, tempfilling, attn_pattern, 
-                                num_heads, head_dim, dropout_p, out_proj_weight, out_proj_bias)
-            complete_attn_output[~lenmask_attn] = attn_output
-        
-        complete_attn_output = complete_attn_output.reshape(bsz, seq*seq, embed_dim).transpose(0, 1)      
-
-    elif attn_pattern == 'sibling':
-        
-        t = torch.arange(seq).repeat(seq).to(q.device)
-        t1 = torch.broadcast_to(t[None, ...], (seq * seq, seq * seq))
-        t2 = torch.broadcast_to(t[..., None], (seq * seq, seq * seq))
-        h = torch.arange(seq).to(q.device)
-        h = torch.broadcast_to(h[..., None], (seq, seq)).reshape(-1)
-        h1 = torch.broadcast_to(h[None, ...], (seq * seq, seq * seq))
-        h2 = torch.broadcast_to(h[..., None], (seq * seq, seq * seq))
-        tempfilling = t - h + 1
-        tempfilling = seq - tempfilling
-        pattern_mask = ~(((h1 == t2 + 1) | (t1 == h2 - 1)) & (h1 <= t1))
-        pattern_mask = torch.broadcast_to(pattern_mask[None, ...], (bsz, seq * seq, seq * seq))
-        
-        # print("pattern_mask", pattern_mask)
-        # print("pattern_mask_shape", pattern_mask.shape)
-
-        q_repr = q.transpose(0, 1)
-        k_repr = k.transpose(0, 1)
-        v_repr = v.transpose(0, 1)
-
-        templength = 1
-        for i in range(1, seq + 1, 2):
-            if i >= seq / 2:
-                templength = i
-                break
-
-            lenlist = [i, i+1]
-            # print("lenlist", lenlist)
-            
-            attn_output, lenmask_attn = grouppadding_subprocess(q_repr, k_repr, v_repr, lenlist, pattern_mask, tempfilling, attn_pattern, 
-                            num_heads, head_dim, dropout_p, out_proj_weight, out_proj_bias)
-            complete_attn_output[~lenmask_attn] = attn_output
-        
-        for i in range(templength, seq, 4):
-            if (i + 3) >= seq-1:
-                lenlist = []
-                for m in range(i, seq):
-                    lenlist.append(m)
-            else:
-                lenlist = [i, i + 1, i + 2, i + 3]
-            # print("lenlist", lenlist)
-
-            attn_output, lenmask_attn = grouppadding_subprocess(q_repr, k_repr, v_repr, lenlist, pattern_mask, tempfilling, attn_pattern, 
-                            num_heads, head_dim, dropout_p, out_proj_weight, out_proj_bias)
-            complete_attn_output[~lenmask_attn] = attn_output
-        
-        lenlist = [seq]
+        lenlist = [i, i+1]
         # print("lenlist: ", lenlist)
+
         attn_output, lenmask_attn = grouppadding_subprocess(q_repr, k_repr, v_repr, lenlist, pattern_mask, tempfilling, attn_pattern, 
-                            num_heads, head_dim, dropout_p, out_proj_weight, out_proj_bias)
+                        num_heads, head_dim, dropout_p, out_proj_weight, out_proj_bias)
         complete_attn_output[~lenmask_attn] = attn_output
 
-        complete_attn_output = complete_attn_output.reshape(bsz, seq*seq, embed_dim).transpose(0, 1)
+    for i in range(templength, seq + 1, 4):
+        if (i + 3) >= seq:
+            lenlist = []
+            for m in range(i, seq + 1):
+                lenlist.append(m)
+        else:
+            lenlist = [i, i + 1, i + 2, i + 3]
+        # print("lenlist: ", lenlist)
 
-    elif attn_pattern == 'alltoken':
-        pass
-    elif attn_pattern == 'both': # alltoken and samehandt
-        pass
-    else:
-        raise RuntimeError("Invalid attention pattern.")
+        attn_output, lenmask_attn = grouppadding_subprocess(q_repr, k_repr, v_repr, lenlist, pattern_mask, tempfilling, attn_pattern, 
+                        num_heads, head_dim, dropout_p, out_proj_weight, out_proj_bias)
+        complete_attn_output[~lenmask_attn] = attn_output
+
+    complete_attn_output = complete_attn_output.reshape(bsz, seq*seq, embed_dim).transpose(0, 1)
+
     if need_weights:
         # optionally average attention weights over heads
         raise RuntimeError("Have not fill attention weights and do reverse on them.")
@@ -781,7 +640,7 @@ class myMultiheadAttention(Module):
         super(myMultiheadAttention, self).__setstate__(state)
 
     def forward(self, query: Tensor, key: Tensor, value: Tensor,
-                attn_pattern: str = "insidetoken", need_weights: bool = False, 
+                attn_pattern: list = ["insidetoken"], need_weights: bool = False, 
                 average_attn_weights: bool = False) -> Tuple[Tensor, Optional[Tensor]]:
         r"""
     Args:
@@ -922,12 +781,12 @@ class myTransformerEncoderLayer(Module):
         if not hasattr(self, 'activation'):
             self.activation = F.relu
 
-    def forward(self, src: Tensor, attn_pattern: str = "insidetoken") -> Tensor:
+    def forward(self, src: Tensor, attn_pattern: list = ["insidetoken"]) -> Tensor:
         r"""Pass the input through the encoder layer.
 
         Args:
             src: the sequence to the encoder (required).
-            attn_pattern: the attention pattern (optional, default: "insidetoken"--attend to inside token).
+            attn_pattern: the attention pattern (optional, default: ["insidetoken"]--attend to inside token).
         
         """
         x = src
@@ -941,7 +800,7 @@ class myTransformerEncoderLayer(Module):
         return x
 
     # self-attention block
-    def _sa_block(self, x: Tensor, attn_pattern: str = "insidetoken") -> Tensor:
+    def _sa_block(self, x: Tensor, attn_pattern: list = ["insidetoken"]) -> Tensor:
         x = self.self_attn(x, x, x,
                            attn_pattern=attn_pattern,
                            need_weights=False)[0]
@@ -976,12 +835,12 @@ class myTransformerEncoder(Module):
         self.num_layers = num_layers
         self.norm = norm
 
-    def forward(self, src: Tensor, attn_pattern: str = "insidetoken") -> Tensor:
+    def forward(self, src: Tensor, attn_pattern: list = ["insidetoken"]) -> Tensor:
         r"""Pass the input through the encoder layers in turn.
 
         Args:
             src: the sequence to the encoder (required).
-            attn_pattern: the attention pattern (optional, default: "insidetoken"--attend to inside token).
+            attn_pattern: the attention pattern (optional, default: ["insidetoken"]--attend to inside token).
         
         """
         output = src
@@ -1001,5 +860,5 @@ if __name__ == "__main__":
     print("self-defined_x: ", src)
     encoder_layer = myTransformerEncoderLayer(d_model=4, nhead=4)
     transformer_encoder = myTransformerEncoder(encoder_layer, num_layers=1)
-    out = transformer_encoder(src, attn_pattern="subspan")
+    out = transformer_encoder(src, attn_pattern=['insidetoken', 'samehandt', 'sibling', 'alltoken'])
     print("out: ", out)

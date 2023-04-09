@@ -33,7 +33,7 @@ class SpanRepr(ABC, nn.Module):
 class ComplexSpanRepr(ABC, nn.Module):
     """Abstract class describing span representation."""
 
-    def __init__(self, method, input_dim, use_proj=False, proj_dim=256, attn_schema='none', nhead=2, nlayer=2):
+    def __init__(self, method, input_dim, use_proj=False, proj_dim=256, attn_schema=['none'], nhead=2, nlayer=2):
         super(ComplexSpanRepr, self).__init__()
         self.method = method
         self.input_dim = input_dim
@@ -230,7 +230,7 @@ class AttnSpanRepr(SpanRepr, nn.Module):
 
 class FullyConnectSpanRepr(ComplexSpanRepr, nn.Module):
     
-    def __init__(self, method, input_dim, use_proj=False, proj_dim=256, attn_schema='none', nhead=2, nlayer=2):
+    def __init__(self, method, input_dim, use_proj=False, proj_dim=256, attn_schema=['none'], nhead=2, nlayer=2):
         
         super(FullyConnectSpanRepr, self).__init__(method, input_dim, use_proj=use_proj, proj_dim=proj_dim, 
                                                    attn_schema=attn_schema, nhead=nhead, nlayer=nlayer)
@@ -243,12 +243,9 @@ class FullyConnectSpanRepr(ComplexSpanRepr, nn.Module):
         elif self.method in ['endpoint', 'diff_sum']:
             self.output_dim = input_dim * 2
 
-        if self.attn_schema == 'fullyconnect':
-            trans_encoder_layer = nn.TransformerEncoderLayer(d_model=self.output_dim, nhead=self.nhead)
-            trans_layernorm = nn.LayerNorm(self.output_dim)
-            self.trans = nn.TransformerEncoder(trans_encoder_layer, num_layers=self.nlayer, norm=trans_layernorm)
-        else:
-            raise RuntimeError("Incorrect span module place.")
+        trans_encoder_layer = nn.TransformerEncoderLayer(d_model=self.output_dim, nhead=self.nhead)
+        trans_layernorm = nn.LayerNorm(self.output_dim)
+        self.trans = nn.TransformerEncoder(trans_encoder_layer, num_layers=self.nlayer, norm=trans_layernorm)
 
     def forward(self, encoded_input, start_ids, end_ids, query_batch_idx):
         if self.use_proj:
@@ -317,7 +314,7 @@ class FullyConnectSpanRepr(ComplexSpanRepr, nn.Module):
 
 class AttnSchemaSpanRepr(ComplexSpanRepr, nn.Module):
     
-    def __init__(self, method, input_dim, use_proj=False, proj_dim=256, attn_schema='none', nhead=2, nlayer=2):
+    def __init__(self, method, input_dim, use_proj=False, proj_dim=256, attn_schema=['none'], nhead=2, nlayer=2):
         
         super(AttnSchemaSpanRepr, self).__init__(method, input_dim, use_proj=use_proj, proj_dim=proj_dim, 
                                                    attn_schema=attn_schema, nhead=nhead, nlayer=nlayer)
@@ -329,12 +326,10 @@ class AttnSchemaSpanRepr(ComplexSpanRepr, nn.Module):
             self.output_dim = input_dim
         elif self.method in ['endpoint', 'diff_sum']:
             self.output_dim = input_dim * 2
-        if self.attn_schema in ['insidetoken', 'samehandt']:
-            trans_encoder_layer = myTransformerEncoderLayer(d_model=self.output_dim, nhead=self.nhead)
-            trans_layernorm = nn.LayerNorm(self.output_dim)
-            self.trans = myTransformerEncoder(trans_encoder_layer, num_layers=self.nlayer, norm=trans_layernorm)
-        else:
-            raise RuntimeError("Incorrect span module place.")
+
+        trans_encoder_layer = myTransformerEncoderLayer(d_model=self.output_dim, nhead=self.nhead)
+        trans_layernorm = nn.LayerNorm(self.output_dim)
+        self.trans = myTransformerEncoder(trans_encoder_layer, num_layers=self.nlayer, norm=trans_layernorm)
 
     def forward(self, encoded_input, start_ids, end_ids, query_batch_idx):
         if self.use_proj:
@@ -403,10 +398,10 @@ class AttnSchemaSpanRepr(ComplexSpanRepr, nn.Module):
         return self.output_dim
 
 
-def get_span_module(input_dim, method="mean", use_proj=False, proj_dim=256, attn_schema='none', nhead=2, nlayer=2):
+def get_span_module(input_dim, method="mean", use_proj=False, proj_dim=256, attn_schema=['none'], nhead=2, nlayer=2):
     """Initializes the appropriate span representation class and returns the object.
     """
-    if attn_schema == 'none':
+    if attn_schema == ['none']:
         if method == "mean":
             return MeanSpanRepr(input_dim, use_proj=use_proj, proj_dim=proj_dim)
         elif method == "max":
@@ -419,12 +414,13 @@ def get_span_module(input_dim, method="mean", use_proj=False, proj_dim=256, attn
             return AttnSpanRepr(input_dim, use_proj=use_proj, proj_dim=proj_dim)
         else:
             raise NotImplementedError
-    elif attn_schema == 'fullyconnect':
+    elif attn_schema == ['fullyconnect']:
         return FullyConnectSpanRepr(method, input_dim, use_proj=use_proj, proj_dim=proj_dim, nhead=nhead, nlayer=nlayer)
-    elif attn_schema in ['insidetoken', 'samehandt']:
-        return AttnSchemaSpanRepr(method, input_dim, use_proj=use_proj, proj_dim=proj_dim, attn_schema=attn_schema, nhead=nhead, nlayer=nlayer)
     else:
-        raise NotImplementedError
+        for item in attn_schema:
+            if item not in ['insidetoken', 'samehandt', 'sibling', 'alltoken']:
+                raise NotImplementedError
+        return AttnSchemaSpanRepr(method, input_dim, use_proj=use_proj, proj_dim=proj_dim, attn_schema=attn_schema, nhead=nhead, nlayer=nlayer)
 
 
 if __name__ == '__main__':

@@ -154,8 +154,9 @@ def create_parser():
                         choices=('mean', 'max', 'diff_sum', 'endpoint', 'attn'))
 
     # span attention
-    parser.add_argument('-attn_schema', type=str, default='none', 
-                        choices=('none', 'fullyconnect', 'insidetoken', 'samehandt', 'both'))
+    # parser.add_argument('-attn_schema', type=str, default='none', 
+    #                     choices=('none', 'fullyconnect', 'insidetoken', 'samehandt', 'alltoken'))
+    parser.add_argument('-attn_schema', nargs='+', type=str, default=['none'])
     parser.add_argument("-nhead", type=int, default=2)
     parser.add_argument("-nlayer", type=int, default=2)
 
@@ -438,7 +439,7 @@ def main():
                 elif not_improved_epoch % lr_controller.weight_decay_range == 0:
                     logger.info(
                         f'Re-initialize learning rate to '
-                        f'{optimizer.param_groups[0]["lr"] / 2.0:.8f}'
+                        f'{optimizer.param_groups[0]["lr"] / 2.0:.8f}, {optimizer.param_groups[1]["lr"] / 2.0:.8f}'
                     )
                     optimizer = getattr(torch.optim, args.optimizer)([{'params': params, 'lr': optimizer.param_groups[0]['lr'] / 2.0}, 
                                                                       {'params': attn_params, 'lr': optimizer.param_groups[1]['lr'] / 2.0}])
