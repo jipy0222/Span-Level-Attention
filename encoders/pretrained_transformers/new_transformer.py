@@ -222,7 +222,7 @@ def _scaled_dot_product_attention(
     return output, attn
 
 
-def grouppadding_subprocess(q_repr, k_repr, v_repr, lenlist, pattern_mask, tempfilling, attn_pattern, 
+def grouppadding_subprocess(q_repr, k_repr, v_repr, lenlist, pattern_mask, tempfilling,
                             num_heads, head_dim, dropout_p, out_proj_weight, out_proj_bias):
     
     bsz, tgt_len, embed_dim = q_repr.shape
@@ -531,7 +531,7 @@ def mymulti_head_attention_forward_grouppadding(
         lenlist = [i, i+1]
         # print("lenlist: ", lenlist)
 
-        attn_output, lenmask_attn = grouppadding_subprocess(q_repr, k_repr, v_repr, lenlist, pattern_mask, tempfilling, attn_pattern, 
+        attn_output, lenmask_attn = grouppadding_subprocess(q_repr, k_repr, v_repr, lenlist, pattern_mask, tempfilling,
                         num_heads, head_dim, dropout_p, out_proj_weight, out_proj_bias)
         complete_attn_output[~lenmask_attn] = attn_output
 
@@ -544,7 +544,7 @@ def mymulti_head_attention_forward_grouppadding(
             lenlist = [i, i + 1, i + 2, i + 3]
         # print("lenlist: ", lenlist)
 
-        attn_output, lenmask_attn = grouppadding_subprocess(q_repr, k_repr, v_repr, lenlist, pattern_mask, tempfilling, attn_pattern, 
+        attn_output, lenmask_attn = grouppadding_subprocess(q_repr, k_repr, v_repr, lenlist, pattern_mask, tempfilling,
                         num_heads, head_dim, dropout_p, out_proj_weight, out_proj_bias)
         complete_attn_output[~lenmask_attn] = attn_output
 

@@ -13,6 +13,10 @@ class FixLengthLoader(object):
         self.item_dict_key = ['subwords','subword_to_word_idx','spans1','spans2']
         self.item_lst_key = ['labels','seq_len']
 
+    def shuffle_self(self):    
+        if self.shuffle:
+            self.dataset.reorder()
+
     def __iter__(self):
         batch = []
         length = 0

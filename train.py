@@ -6,6 +6,7 @@ import numpy as np
 import os
 import time
 import torch
+from torch.utils.tensorboard import SummaryWriter
 
 from encoders.pretrained_transformers import Encoder
 from model import SpanModel
@@ -72,32 +73,53 @@ def forward_batch(model, batch, mode='loss', use_argmax=None):
     else:
         pred_labels = (preds > 0.5).long()
 
-    if mode == 'pred':  # for validation
+    if mode == 'pred_loss':
+        loss = model.training_criterion(preds, one_hot_labels.float())
+        return pred_labels, one_hot_labels, loss
+    elif mode == 'pred':  # for validation
         return pred_labels, one_hot_labels
     elif mode == 'loss':  # for training
         loss = model.training_criterion(preds, one_hot_labels.float())
         return loss
 
-
-def validate(loader, model, output_example=False, use_argmax=False):
+# def validate(loader, model, logger, output_example=False, use_argmax=False):
+def validate(loader, model, getloss=False, output_example=False, use_argmax=False):
     # save the random state for recovery
     rng_state = torch.random.get_rng_state()
     cuda_rng_state = torch.cuda.random.get_rng_state()
     numerator = denom_p = denom_r = 0
 
-    for batch_dict in loader:
-        # print("batch_dict: ", batch_dict)
-        # print(batch_dict['subwords']['bert'].size())
-        preds, ans = forward_batch(model, batch_dict, mode='pred', use_argmax=use_argmax)
-        num, dp, dr = instance_f1_info(ans, preds)
-        numerator += num
-        denom_p += dp
-        denom_r += dr
+    if getloss == True:
+        cumulated_loss = cumulated_num = 0
+        for batch_dict in loader:
+            preds, ans, loss = forward_batch(model, batch_dict, mode='pred_loss', use_argmax=use_argmax)
+            num_instances = len(batch_dict['labels'])
+            cumulated_loss += loss.item() * num_instances
+            cumulated_num += num_instances
+            num, dp, dr = instance_f1_info(ans, preds)
+            numerator += num
+            denom_p += dp
+            denom_r += dr
+        val_loss = cumulated_loss / cumulated_num
 
-    # recover the random state for reproduction
-    torch.random.set_rng_state(rng_state)
-    torch.cuda.random.set_rng_state(cuda_rng_state)
-    return f1_score(numerator, denom_p, denom_r)
+        # recover the random state for reproduction
+        torch.random.set_rng_state(rng_state)
+        torch.cuda.random.set_rng_state(cuda_rng_state)
+        return f1_score(numerator, denom_p, denom_r), val_loss
+    else:
+        for batch_dict in loader:
+            # print("batch_dict: ", batch_dict)
+            # print(batch_dict['subwords']['bert'].size())
+            preds, ans = forward_batch(model, batch_dict, mode='pred', use_argmax=use_argmax)
+            num, dp, dr = instance_f1_info(ans, preds)
+            numerator += num
+            denom_p += dp
+            denom_r += dr
+
+        # recover the random state for reproduction
+        torch.random.set_rng_state(rng_state)
+        torch.cuda.random.set_rng_state(cuda_rng_state)
+        return f1_score(numerator, denom_p, denom_r)
 
 
 def log_arguments(args):
@@ -212,6 +234,9 @@ def main():
 
     args.start_time = time.time()
     logger.info(f"Model path: {model_path}")
+
+    writer = SummaryWriter(log_dir=model_path)
+
     #####################
     # create data sets, tokenizers, and data loaders
     #####################
@@ -349,7 +374,7 @@ def main():
         model.load_state_dict(best_model)
         model.eval()
         with torch.no_grad():
-            test_f1 = validate(data_loader, model, args.output_example, args.use_argmax)
+            test_f1 = validate(data_loader, model, output_example=args.output_example, use_argmax=args.use_argmax)
             logger.info(f'Test F1 {test_f1 * 100:6.2f}%')
         return 0
 
@@ -370,6 +395,7 @@ def main():
     model.eval()
     logger.info('-' * 80)
     with torch.no_grad():
+        # curr_f1 = validate(data_loader['development'], model, logger, use_argmax=args.use_argmax)
         curr_f1 = validate(data_loader['development'], model, use_argmax=args.use_argmax)
     logger.info(f'Validation F1 {curr_f1 * 100:6.2f}%')
 
@@ -380,6 +406,7 @@ def main():
             break
         model.train()
         cumulated_loss = cumulated_num = 0
+        # data_loader['train'].shuffle_self()
         for step, batch in enumerate(data_loader['train']):
             if terminate:
                 break
@@ -419,7 +446,9 @@ def main():
                 model.eval()
                 logger.info('-' * 80)
                 with torch.no_grad():
-                    curr_f1 = validate(data_loader['development'], model, use_argmax=args.use_argmax)
+                    curr_f1, val_loss_step = validate(data_loader['development'], model, getloss=True, use_argmax=args.use_argmax)
+                writer.add_scalar(tag="val_f1", scalar_value=curr_f1, global_step=actual_step // (args.real_batch_size // args.batch_size))
+                writer.add_scalar(tag="val_loss_step", scalar_value=val_loss_step, global_step=actual_step // (args.real_batch_size // args.batch_size))
                 logger.info(f'Validation F1 {curr_f1 * 100:6.2f}%')
                 # update when there is a new best model
                 if curr_f1 > best_f1:
@@ -458,6 +487,12 @@ def main():
                 if (time.time() - args.start_time) >= args.time_limit:
                     logger.info('Training time is almost up -- terminating.')
                     exit(0)
+        writer.add_scalar(tag="loss/train", scalar_value=cumulated_loss/cumulated_num, global_step=epoch)
+        model.eval()
+        with torch.no_grad():
+            curr_f1, val_loss = validate(data_loader['development'], model, getloss=True, use_argmax=args.use_argmax)
+        writer.add_scalar(tag="loss/val", scalar_value=val_loss, global_step=epoch)
+        model.train()
 
     # finished training, testing
     assert best_model is not None

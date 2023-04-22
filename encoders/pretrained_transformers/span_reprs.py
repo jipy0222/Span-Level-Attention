@@ -19,7 +19,7 @@ class SpanRepr(ABC, nn.Module):
             self.proj = nn.Linear(input_dim, proj_dim)
 
     @abstractmethod
-    def forward(self, encoded_input, start_ids, end_ids, query_batch_idx):
+    def forward(self, encoded_input, start_ids_1, end_ids_1, query_batch_idx, start_ids_2, end_ids_2):
         raise NotImplementedError
 
     def get_input_dim(self):
@@ -46,7 +46,7 @@ class ComplexSpanRepr(ABC, nn.Module):
         self.nlayer = nlayer
 
     @abstractmethod
-    def forward(self, encoded_input, start_ids, end_ids, query_batch_idx):
+    def forward(self, encoded_input, start_ids_1, end_ids_1, query_batch_idx, start_ids_2, end_ids_2):
         raise NotImplementedError
 
     def get_input_dim(self):
@@ -60,19 +60,24 @@ class ComplexSpanRepr(ABC, nn.Module):
 class MeanSpanRepr(SpanRepr, nn.Module):
     """Class implementing the mean span representation."""
 
-    def forward(self, encoded_input, start_ids, end_ids, query_batch_idx):
+    def forward(self, encoded_input, start_ids_1, end_ids_1, query_batch_idx, start_ids_2, end_ids_2):
         if self.use_proj:
             encoded_input = self.proj(encoded_input)
 
         tmp_encoded_input = encoded_input
         bsz, seq, hd = encoded_input.size()
-        span_repr = torch.empty([bsz, seq, seq, hd], device=encoded_input.device)
+        span_repr = torch.zeros([bsz, seq, seq, hd], device=encoded_input.device)
         for i in range(seq):
             tmp_encoded_input = ((tmp_encoded_input[:, 0:seq - i, :] * i + encoded_input[:, i:, :]) / (i + 1)).float()
             span_repr[:, range(seq - i), range(i, seq), :] = tmp_encoded_input
         
-        res = span_repr[query_batch_idx, start_ids, end_ids, :]
-        return res
+        if start_ids_2 == None:
+            res = span_repr[query_batch_idx, start_ids_1, end_ids_1, :]
+            return res, None
+        else:
+            res1 = span_repr[query_batch_idx, start_ids_1, end_ids_1, :]
+            res2 = span_repr[query_batch_idx, start_ids_2, end_ids_2, :]
+            return res1, res2
 
     def get_output_dim(self):
         if self.use_proj:
@@ -84,18 +89,23 @@ class MeanSpanRepr(SpanRepr, nn.Module):
 class EndPointRepr(SpanRepr, nn.Module):
     """Class implementing the diff span representation - [h_j; h_i]"""
 
-    def forward(self, encoded_input, start_ids, end_ids, query_batch_idx):
+    def forward(self, encoded_input, start_ids_1, end_ids_1, query_batch_idx, start_ids_2, end_ids_2):
         if self.use_proj:
             encoded_input = self.proj(encoded_input)
 
         bsz, seq, hd = encoded_input.size()
         hd = hd*2
-        span_repr = torch.empty([bsz, seq, seq, hd], device=encoded_input.device)
+        span_repr = torch.zeros([bsz, seq, seq, hd], device=encoded_input.device)
         for i in range(seq):
             span_repr[:, range(seq - i), range(i, seq), :] = torch.cat((encoded_input[:, 0:seq-i, :], encoded_input[:, i:, :]), dim=2).float()
         
-        res = span_repr[query_batch_idx, start_ids, end_ids, :]
-        return res
+        if start_ids_2 == None:
+            res = span_repr[query_batch_idx, start_ids_1, end_ids_1, :]
+            return res, None
+        else:
+            res1 = span_repr[query_batch_idx, start_ids_1, end_ids_1, :]
+            res2 = span_repr[query_batch_idx, start_ids_2, end_ids_2, :]
+            return res1, res2
 
     def get_output_dim(self):
         if self.use_proj:
@@ -107,18 +117,23 @@ class EndPointRepr(SpanRepr, nn.Module):
 class DiffSumSpanRepr(SpanRepr, nn.Module):
     """Class implementing the diff_sum span representation - [h_j - h_i; h_j + h_i]"""
 
-    def forward(self, encoded_input, start_ids, end_ids, query_batch_idx):
+    def forward(self, encoded_input, start_ids_1, end_ids_1, query_batch_idx, start_ids_2, end_ids_2):
         if self.use_proj:
             encoded_input = self.proj(encoded_input)
         
         bsz, seq, hd = encoded_input.size()
         hd = hd*2
-        span_repr = torch.empty([bsz, seq, seq, hd], device=encoded_input.device)
+        span_repr = torch.zeros([bsz, seq, seq, hd], device=encoded_input.device)
         for i in range(seq):
             span_repr[:, range(seq - i), range(i, seq), :] = torch.cat((encoded_input[:, i:, :]-encoded_input[:, 0:seq-i, :], encoded_input[:, i:, :]+encoded_input[:, 0:seq-i, :]), dim=2).float()
         
-        res = span_repr[query_batch_idx, start_ids, end_ids, :]
-        return res
+        if start_ids_2 == None:
+            res = span_repr[query_batch_idx, start_ids_1, end_ids_1, :]
+            return res, None
+        else:
+            res1 = span_repr[query_batch_idx, start_ids_1, end_ids_1, :]
+            res2 = span_repr[query_batch_idx, start_ids_2, end_ids_2, :]
+            return res1, res2
 
     def get_output_dim(self):
         if self.use_proj:
@@ -130,19 +145,24 @@ class DiffSumSpanRepr(SpanRepr, nn.Module):
 class MaxSpanRepr(SpanRepr, nn.Module):
     """Class implementing the max-pool span representation."""
 
-    def forward(self, encoded_input, start_ids, end_ids, query_batch_idx):
+    def forward(self, encoded_input, start_ids_1, end_ids_1, query_batch_idx, start_ids_2, end_ids_2):
         if self.use_proj:
             encoded_input = self.proj(encoded_input)
 
         tmp_encoded_input = encoded_input
         bsz, seq, hd = encoded_input.size()
-        span_repr = torch.empty([bsz, seq, seq, hd], device=encoded_input.device)
+        span_repr = torch.zeros([bsz, seq, seq, hd], device=encoded_input.device)
         for i in range(seq):
             tmp_encoded_input = (torch.maximum(encoded_input[:, i:, :], tmp_encoded_input[:, 0:seq - i, :])).float()
             span_repr[:, range(seq - i), range(i, seq), :] = tmp_encoded_input
         
-        res = span_repr[query_batch_idx, start_ids, end_ids, :]
-        return res
+        if start_ids_2 == None:
+            res = span_repr[query_batch_idx, start_ids_1, end_ids_1, :]
+            return res, None
+        else:
+            res1 = span_repr[query_batch_idx, start_ids_1, end_ids_1, :]
+            res2 = span_repr[query_batch_idx, start_ids_2, end_ids_2, :]
+            return res1, res2
 
     def get_output_dim(self):
         if self.use_proj:
@@ -198,12 +218,12 @@ class AttnSpanRepr(SpanRepr, nn.Module):
         # self.attention_params.weight.data.fill_(0)
         # self.attention_params.bias.data.fill_(0)
 
-    def forward(self, encoded_input, start_ids, end_ids, query_batch_idx):
+    def forward(self, encoded_input, start_ids_1, end_ids_1, query_batch_idx, start_ids_2, end_ids_2):
         if self.use_proj:
             encoded_input = self.proj(encoded_input)
 
         bsz, seq, hd = encoded_input.size()
-        span_repr = torch.empty([bsz, seq, seq, hd], device=encoded_input.device)
+        span_repr = torch.zeros([bsz, seq, seq, hd], device=encoded_input.device)
         for start in range(seq):
             tmp_start_ids = torch.tensor([start]).repeat(seq-start).repeat(bsz)
             tmp_end_ids = torch.arange(start, seq).repeat(bsz)
@@ -218,8 +238,13 @@ class AttnSpanRepr(SpanRepr, nn.Module):
             attention_term = torch.sum(attention_wts * to_masked_encoded_input, dim=1)
             span_repr[tmp_query_batch_idx, tmp_start_ids, tmp_end_ids, :] = attention_term
 
-        res = span_repr[query_batch_idx, start_ids, end_ids, :]
-        return res
+        if start_ids_2 == None:
+            res = span_repr[query_batch_idx, start_ids_1, end_ids_1, :]
+            return res, None
+        else:
+            res1 = span_repr[query_batch_idx, start_ids_1, end_ids_1, :]
+            res2 = span_repr[query_batch_idx, start_ids_2, end_ids_2, :]
+            return res1, res2
 
     def get_output_dim(self):
         if self.use_proj:
@@ -247,39 +272,39 @@ class FullyConnectSpanRepr(ComplexSpanRepr, nn.Module):
         trans_layernorm = nn.LayerNorm(self.output_dim)
         self.trans = nn.TransformerEncoder(trans_encoder_layer, num_layers=self.nlayer, norm=trans_layernorm)
 
-    def forward(self, encoded_input, start_ids, end_ids, query_batch_idx):
+    def forward(self, encoded_input, start_ids_1, end_ids_1, query_batch_idx, start_ids_2, end_ids_2):
         if self.use_proj:
             encoded_input = self.proj(encoded_input)
         
         if self.method == 'max':
             tmp_encoded_input = encoded_input
             bsz, seq, hd = encoded_input.size()
-            span_repr = torch.empty([bsz, seq, seq, hd], device=encoded_input.device)
+            span_repr = torch.zeros([bsz, seq, seq, hd], device=encoded_input.device)
             for i in range(seq):
                 tmp_encoded_input = (torch.maximum(encoded_input[:, i:, :], tmp_encoded_input[:, 0:seq - i, :])).float()
                 span_repr[:, range(seq - i), range(i, seq), :] = tmp_encoded_input
         elif self.method == 'mean':
             tmp_encoded_input = encoded_input
             bsz, seq, hd = encoded_input.size()
-            span_repr = torch.empty([bsz, seq, seq, hd], device=encoded_input.device)
+            span_repr = torch.zeros([bsz, seq, seq, hd], device=encoded_input.device)
             for i in range(seq):
                 tmp_encoded_input = ((tmp_encoded_input[:, 0:seq - i, :] * i + encoded_input[:, i:, :]) / (i + 1)).float()
                 span_repr[:, range(seq - i), range(i, seq), :] = tmp_encoded_input
         elif self.method == 'endpoint':
             bsz, seq, hd = encoded_input.size()
             hd = hd*2
-            span_repr = torch.empty([bsz, seq, seq, hd], device=encoded_input.device)
+            span_repr = torch.zeros([bsz, seq, seq, hd], device=encoded_input.device)
             for i in range(seq):
                 span_repr[:, range(seq - i), range(i, seq), :] = torch.cat((encoded_input[:, 0:seq-i, :], encoded_input[:, i:, :]), dim=2).float()
         elif self.method == 'diff_sum':
             bsz, seq, hd = encoded_input.size()
             hd = hd*2
-            span_repr = torch.empty([bsz, seq, seq, hd], device=encoded_input.device)
+            span_repr = torch.zeros([bsz, seq, seq, hd], device=encoded_input.device)
             for i in range(seq):
                 span_repr[:, range(seq - i), range(i, seq), :] = torch.cat((encoded_input[:, i:, :]-encoded_input[:, 0:seq-i, :], encoded_input[:, i:, :]+encoded_input[:, 0:seq-i, :]), dim=2).float()
         elif self.method == 'attn':
             bsz, seq, hd = encoded_input.size()
-            span_repr = torch.empty([bsz, seq, seq, hd], device=encoded_input.device)
+            span_repr = torch.zeros([bsz, seq, seq, hd], device=encoded_input.device)
             for start in range(seq):
                 tmp_start_ids = torch.tensor([start]).repeat(seq-start).repeat(bsz)
                 tmp_end_ids = torch.arange(start, seq).repeat(bsz)
@@ -295,7 +320,7 @@ class FullyConnectSpanRepr(ComplexSpanRepr, nn.Module):
                 span_repr[tmp_query_batch_idx, tmp_start_ids, tmp_end_ids, :] = attention_term
         
         bsz, seq, _, hd = span_repr.size()
-        seq_t = torch.arange(seq)
+        seq_t = torch.arange(seq).to(span_repr.device)
         seq_x = torch.broadcast_to(seq_t[None, None, ...], (bsz, seq, seq))
         seq_y = torch.broadcast_to(seq_t[None, ..., None], (bsz, seq, seq))
         mask = seq_x < seq_y
@@ -305,8 +330,13 @@ class FullyConnectSpanRepr(ComplexSpanRepr, nn.Module):
         span_repr = self.trans(trans_repr.permute(1, 0, 2), src_key_padding_mask=src_key_mask).permute(1, 0, 2)
         span_repr = span_repr.reshape(bsz, seq, seq, hd)
 
-        res = span_repr[query_batch_idx, start_ids, end_ids, :]
-        return res
+        if start_ids_2 == None:
+            res = span_repr[query_batch_idx, start_ids_1, end_ids_1, :]
+            return res, None
+        else:
+            res1 = span_repr[query_batch_idx, start_ids_1, end_ids_1, :]
+            res2 = span_repr[query_batch_idx, start_ids_2, end_ids_2, :]
+            return res1, res2
 
     def get_output_dim(self):
         return self.output_dim
@@ -331,39 +361,39 @@ class AttnSchemaSpanRepr(ComplexSpanRepr, nn.Module):
         trans_layernorm = nn.LayerNorm(self.output_dim)
         self.trans = myTransformerEncoder(trans_encoder_layer, num_layers=self.nlayer, norm=trans_layernorm)
 
-    def forward(self, encoded_input, start_ids, end_ids, query_batch_idx):
+    def forward(self, encoded_input, start_ids_1, end_ids_1, query_batch_idx, start_ids_2, end_ids_2):
         if self.use_proj:
             encoded_input = self.proj(encoded_input)
         
         if self.method == 'max':
             tmp_encoded_input = encoded_input
             bsz, seq, hd = encoded_input.size()
-            span_repr = torch.empty([bsz, seq, seq, hd], device=encoded_input.device)
+            span_repr = torch.zeros([bsz, seq, seq, hd], device=encoded_input.device)
             for i in range(seq):
                 tmp_encoded_input = (torch.maximum(encoded_input[:, i:, :], tmp_encoded_input[:, 0:seq - i, :])).float()
                 span_repr[:, range(seq - i), range(i, seq), :] = tmp_encoded_input
         elif self.method == 'mean':
             tmp_encoded_input = encoded_input
             bsz, seq, hd = encoded_input.size()
-            span_repr = torch.empty([bsz, seq, seq, hd], device=encoded_input.device)
+            span_repr = torch.zeros([bsz, seq, seq, hd], device=encoded_input.device)
             for i in range(seq):
                 tmp_encoded_input = ((tmp_encoded_input[:, 0:seq - i, :] * i + encoded_input[:, i:, :]) / (i + 1)).float()
                 span_repr[:, range(seq - i), range(i, seq), :] = tmp_encoded_input
         elif self.method == 'endpoint':
             bsz, seq, hd = encoded_input.size()
             hd = hd*2
-            span_repr = torch.empty([bsz, seq, seq, hd], device=encoded_input.device)
+            span_repr = torch.zeros([bsz, seq, seq, hd], device=encoded_input.device)
             for i in range(seq):
                 span_repr[:, range(seq - i), range(i, seq), :] = torch.cat((encoded_input[:, 0:seq-i, :], encoded_input[:, i:, :]), dim=2).float()
         elif self.method == 'diff_sum':
             bsz, seq, hd = encoded_input.size()
             hd = hd*2
-            span_repr = torch.empty([bsz, seq, seq, hd], device=encoded_input.device)
+            span_repr = torch.zeros([bsz, seq, seq, hd], device=encoded_input.device)
             for i in range(seq):
                 span_repr[:, range(seq - i), range(i, seq), :] = torch.cat((encoded_input[:, i:, :]-encoded_input[:, 0:seq-i, :], encoded_input[:, i:, :]+encoded_input[:, 0:seq-i, :]), dim=2).float()
         elif self.method == 'attn':
             bsz, seq, hd = encoded_input.size()
-            span_repr = torch.empty([bsz, seq, seq, hd], device=encoded_input.device)
+            span_repr = torch.zeros([bsz, seq, seq, hd], device=encoded_input.device)
             for start in range(seq):
                 tmp_start_ids = torch.tensor([start]).repeat(seq-start).repeat(bsz)
                 tmp_end_ids = torch.arange(start, seq).repeat(bsz)
@@ -387,12 +417,17 @@ class AttnSchemaSpanRepr(ComplexSpanRepr, nn.Module):
         span_repr = self.trans(trans_repr.permute(1, 0, 2), attn_pattern=self.attn_schema).permute(1, 0, 2)
         span_repr = span_repr.reshape(bsz, seq, seq, hd)
 
-        res = span_repr[query_batch_idx, start_ids, end_ids, :]
-
-        if torch.isnan(res).any():
-            print("nan in transformer")
-
-        return res
+        if start_ids_2 == None:
+            res = span_repr[query_batch_idx, start_ids_1, end_ids_1, :]
+            if torch.isnan(res).any():
+                print("nan in transformer")
+            return res, None
+        else:
+            res1 = span_repr[query_batch_idx, start_ids_1, end_ids_1, :]
+            res2 = span_repr[query_batch_idx, start_ids_2, end_ids_2, :]
+            if torch.isnan(res1).any() or torch.isnan(res2).any():
+                print("nan in transformer")
+            return res1, res2
 
     def get_output_dim(self):
         return self.output_dim

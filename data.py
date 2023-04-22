@@ -1,6 +1,7 @@
 import json
 import torch
 from torch.utils.data import Dataset
+import random
 
 '''
 The SingleSpanDataset and DoubleSpanDataset are different only in that DoubleSpanDataset has one more span2 to load;
@@ -99,6 +100,9 @@ class SpanDataset(Dataset):
                     'labels': labels,
                     'seq_len': len(words)
                 }
+                # if len(instance_dict['subwords']['bert']) >= 60:
+                #     filter_by_length_cnt += 1
+                # else:
                 self.data.append(
                     instance_dict
                 )
@@ -126,6 +130,27 @@ class SpanDataset(Dataset):
 
     def __getitem__(self, index):
         return self.data[index]
+    
+    def reorder(self):
+        map = {}
+        maxlen = -1
+        for item in self.data:
+            l = self.instance_length_getter(item)
+            if l not in map:
+                map[l] = []
+            map[l].append(item)
+            if l > maxlen:
+                maxlen = l
+        order = []
+        for l in range(maxlen+1):
+            if l not in map:
+                continue
+            order.append(l)
+        random.shuffle(order)
+        res = []
+        for item in order:
+            res.extend(map[item])
+        self.data = res
 
     @staticmethod
     def get_tokenized_span_indices(subword_to_word_idx, orig_span_indices):
