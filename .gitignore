@@ -9,3 +9,5 @@ ontonotes/
 train.slurm
 **.err
 **.out
+baseline/
+trail/

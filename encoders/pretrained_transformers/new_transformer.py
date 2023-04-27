@@ -1,4 +1,4 @@
-# description for my_transformer.py below:
+# description for new_transformer.py below:
 # revised version of my_transformer.py for TTIC-setting(no padding for sentences in each batch), so src_len is removed
 # origin version of my_transformer.py for triaffine-setting is in deep-span-transformer/model/my_transformer.py
 # origin version also contains mymulti_head_attention_forward(simple loop, too slow) 
@@ -350,7 +350,7 @@ def mymulti_head_attention_forward_grouppadding(
     out_proj_bias: Optional[Tensor],
     training: bool = True,
     need_weights: bool = True,
-    attn_pattern: str = "insidetoken",
+    attn_pattern: list = ["insidetoken"],
     use_separate_proj_weight: bool = False,
     q_proj_weight: Optional[Tensor] = None,
     k_proj_weight: Optional[Tensor] = None,
@@ -547,6 +547,207 @@ def mymulti_head_attention_forward_grouppadding(
         attn_output, lenmask_attn = grouppadding_subprocess(q_repr, k_repr, v_repr, lenlist, pattern_mask, tempfilling,
                         num_heads, head_dim, dropout_p, out_proj_weight, out_proj_bias)
         complete_attn_output[~lenmask_attn] = attn_output
+
+    complete_attn_output = complete_attn_output.reshape(bsz, seq*seq, embed_dim).transpose(0, 1)
+
+    if need_weights:
+        # optionally average attention weights over heads
+        raise RuntimeError("Have not fill attention weights and do reverse on them.")
+    else:
+        if not is_batched:
+            raise RuntimeError("Will not allow non-batched input.")
+        return complete_attn_output, None
+
+
+def mymulti_head_attention_forward_padding(
+    query: Tensor,
+    key: Tensor,
+    value: Tensor,
+    embed_dim_to_check: int,
+    num_heads: int,
+    in_proj_weight: Optional[Tensor],
+    in_proj_bias: Optional[Tensor],
+    dropout_p: float,
+    out_proj_weight: Tensor,
+    out_proj_bias: Optional[Tensor],
+    training: bool = True,
+    need_weights: bool = True,
+    attn_pattern: list = ["insidetoken"],
+    use_separate_proj_weight: bool = False,
+    q_proj_weight: Optional[Tensor] = None,
+    k_proj_weight: Optional[Tensor] = None,
+    v_proj_weight: Optional[Tensor] = None,
+    average_attn_weights: bool = False,
+) -> Tuple[Tensor, Optional[Tensor]]:
+    r"""
+    Args:
+        query, key, value: map a query and a set of key-value pairs to an output.
+            See "Attention Is All You Need" for more details.
+        embed_dim_to_check: total dimension of the model.
+        num_heads: parallel attention heads.
+        in_proj_weight, in_proj_bias: input projection weight and bias.
+        dropout_p: probability of an element to be zeroed.
+        out_proj_weight, out_proj_bias: the output projection weight and bias.
+        training: apply dropout if is ``True``.
+        key_padding_mask: if provided, specified padding elements in the key will
+            be ignored by the attention. This is an binary mask. When the value is True,
+            the corresponding value on the attention layer will be filled with -inf.
+        need_weights: output attn_output_weights.
+        attn_mask: 2D or 3D mask that prevents attention to certain positions. A 2D mask will be broadcasted for all
+            the batches while a 3D mask allows to specify a different mask for the entries of each batch.
+        use_separate_proj_weight: the function accept the proj. weights for query, key,
+            and value in different forms. If false, in_proj_weight will be used, which is
+            a combination of q_proj_weight, k_proj_weight, v_proj_weight.
+        q_proj_weight, k_proj_weight, v_proj_weight, in_proj_bias: input projection weight and bias.
+        average_attn_weights: If true, indicates that the returned ``attn_weights`` should be averaged across heads.
+            Otherwise, ``attn_weights`` are provided separately per head. Note that this flag only has an effect
+            when ``need_weights=True.``. Default: True
+
+
+    Shape:
+        Inputs:
+        - query: :math:`(L, E)` or :math:`(L, N, E)` where L is the target sequence length, N is the batch size, E is
+          the embedding dimension.
+        - key: :math:`(S, E)` or :math:`(S, N, E)`, where S is the source sequence length, N is the batch size, E is
+          the embedding dimension.
+        - value: :math:`(S, E)` or :math:`(S, N, E)` where S is the source sequence length, N is the batch size, E is
+          the embedding dimension.
+        - key_padding_mask: :math:`(S)` or :math:`(N, S)` where N is the batch size, S is the source sequence length.
+          If a ByteTensor is provided, the non-zero positions will be ignored while the zero positions
+          will be unchanged. If a BoolTensor is provided, the positions with the
+          value of ``True`` will be ignored while the position with the value of ``False`` will be unchanged.
+        - attn_mask: 2D mask :math:`(L, S)` where L is the target sequence length, S is the source sequence length.
+          3D mask :math:`(N*num_heads, L, S)` where N is the batch size, L is the target sequence length,
+          S is the source sequence length. attn_mask ensures that position i is allowed to attend the unmasked
+          positions. If a ByteTensor is provided, the non-zero positions are not allowed to attend
+          while the zero positions will be unchanged. If a BoolTensor is provided, positions with ``True``
+          are not allowed to attend while ``False`` values will be unchanged. If a FloatTensor
+          is provided, it will be added to the attention weight.
+
+        Outputs:
+        - attn_output: :math:`(L, E)` or :math:`(L, N, E)` where L is the target sequence length, N is the batch size,
+          E is the embedding dimension.
+        - attn_output_weights: Only returned when ``need_weights=True``. If ``average_attn_weights=True``, returns
+          attention weights averaged across heads of shape :math:`(L, S)` when input is unbatched or
+          :math:`(N, L, S)`, where :math:`N` is the batch size, :math:`L` is the target sequence length, and
+          :math:`S` is the source sequence length. If ``average_weights=False``, returns attention weights per
+          head of shape :math:`(num_heads, L, S)` when input is unbatched or :math:`(N, num_heads, L, S)`.
+    """
+    # print("entering mymulti_head_attention_forward()")
+
+    is_batched = _mha_shape_check(query, key, value, num_heads)
+
+    if not is_batched:
+        raise RuntimeError("Will not allow non-batched input.")
+
+    # set up shape vars
+    tgt_len, bsz, embed_dim = query.shape
+    assert embed_dim == embed_dim_to_check, \
+        f"was expecting embedding dimension of {embed_dim_to_check}, but got {embed_dim}"
+    head_dim = embed_dim // num_heads
+    assert head_dim * num_heads == embed_dim, f"embed_dim {embed_dim} not divisible by num_heads {num_heads}"
+    if use_separate_proj_weight:
+        # allow MHA to have different embedding dimensions when separate projection weights are used
+        assert key.shape[:2] == value.shape[:2], \
+            f"key's sequence and batch dims {key.shape[:2]} do not match value's {value.shape[:2]}"
+    else:
+        assert key.shape == value.shape, f"key shape {key.shape} does not match value shape {value.shape}"
+
+    # adjust dropout probability
+    if not training:
+        dropout_p = 0.0
+
+    # initial complete attention output
+    seq = int(math.sqrt(tgt_len))
+    complete_attn_output = torch.zeros([bsz, seq, seq, embed_dim], device=query.device)
+
+    # compute in-projection
+    if not use_separate_proj_weight:
+        assert in_proj_weight is not None, "use_separate_proj_weight is False but in_proj_weight is None"
+        q, k, v = _in_projection_packed(query, key, value, in_proj_weight, in_proj_bias)
+    else:
+        assert q_proj_weight is not None, "use_separate_proj_weight is True but q_proj_weight is None"
+        assert k_proj_weight is not None, "use_separate_proj_weight is True but k_proj_weight is None"
+        assert v_proj_weight is not None, "use_separate_proj_weight is True but v_proj_weight is None"
+        if in_proj_bias is None:
+            b_q = b_k = b_v = None
+        else:
+            b_q, b_k, b_v = in_proj_bias.chunk(3)
+        q, k, v = _in_projection(query, key, value, q_proj_weight, k_proj_weight, v_proj_weight, b_q, b_k, b_v)
+    # q, k, v: (seq*seq, bsz, embed_dim) batch_inside_order: lexico order. 
+
+    # print("q", q)
+    # print("k", k)
+    # print("v", v)
+    # print("q_size", q.shape)
+    # print("k_size", k.shape)
+    # print("v_size", v.shape)
+
+    t = torch.arange(seq).repeat(seq).to(q.device)
+    t1 = torch.broadcast_to(t[None, ...], (seq * seq, seq * seq))
+    t2 = torch.broadcast_to(t[..., None], (seq * seq, seq * seq))
+    h = torch.arange(seq).to(q.device)
+    h = torch.broadcast_to(h[..., None], (seq, seq)).reshape(-1)
+    h1 = torch.broadcast_to(h[None, ...], (seq * seq, seq * seq))
+    h2 = torch.broadcast_to(h[..., None], (seq * seq, seq * seq))
+
+    pattern_mask = torch.zeros([seq * seq, seq * seq], device=q.device) == 0
+
+    for pattern in attn_pattern:
+
+        if pattern == "insidetoken":
+
+            tmp_pattern_mask = ~((t1 <= t2) & (h1 >= h2))
+            c = torch.tensor([1]).repeat(seq).to(q.device)
+            c = torch.diag_embed(c).reshape(seq * seq)
+            c = torch.broadcast_to(c[None, ...], (seq * seq, seq * seq)) == 0
+            tmp_pattern_mask = (c | tmp_pattern_mask)
+
+            # print("tmp_pattern_mask", tmp_pattern_mask)
+            # print("tmp_pattern_mask_shape", tmp_pattern_mask.shape)
+
+        elif pattern == "samehandt":
+
+            tmp_pattern_mask = ~( ((t1 == t2) & (h1 <= t2)) | ((h1 == h2) & (t1 >= h2)) )
+
+            # print("tmp_pattern_mask", tmp_pattern_mask)
+            # print("tmp_pattern_mask_shape", tmp_pattern_mask.shape)
+        
+        elif pattern == 'sibling':
+
+            tmp_pattern_mask = ~(((h1 == t2 + 1) | (t1 == h2 - 1)) & (h1 <= t1))
+            c = torch.tensor([1]).repeat(seq).to(q.device)
+            c = torch.diag_embed(c).reshape(seq * seq) == 0
+            tmp_pattern_mask[seq-1, :] = c
+            
+            # print("tmp_pattern_mask", tmp_pattern_mask)
+            # print("tmp_pattern_mask_shape", tmp_pattern_mask.shape)
+        
+        elif pattern == 'alltoken':
+
+            c = torch.tensor([1]).repeat(seq).to(q.device)
+            tmp_pattern_mask = torch.diag_embed(c).reshape(seq * seq)
+            tmp_pattern_mask = torch.broadcast_to(tmp_pattern_mask[None, ...], (seq * seq, seq * seq)) == 0
+
+            # print("tmp_pattern_mask", tmp_pattern_mask)
+            # print("tmp_pattern_mask_shape", tmp_pattern_mask.shape)
+
+        else:
+            raise RuntimeError("Unknown attention pattern: {}".format(pattern))
+        
+        pattern_mask = pattern_mask & tmp_pattern_mask
+    
+    tempfilling = torch.sum(~pattern_mask, dim=1)
+    pattern_mask = torch.broadcast_to(pattern_mask[None, ...], (bsz, seq * seq, seq * seq))
+
+    q_repr = q.transpose(0, 1)
+    k_repr = k.transpose(0, 1)
+    v_repr = v.transpose(0, 1)
+
+    lenlist = [i for i in range(1, seq + 1)]
+    attn_output, lenmask_attn = grouppadding_subprocess(q_repr, k_repr, v_repr, lenlist, pattern_mask, tempfilling,
+                        num_heads, head_dim, dropout_p, out_proj_weight, out_proj_bias)
+    complete_attn_output[~lenmask_attn] = attn_output
 
     complete_attn_output = complete_attn_output.reshape(bsz, seq*seq, embed_dim).transpose(0, 1)
 
