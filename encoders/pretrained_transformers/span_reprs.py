@@ -19,7 +19,7 @@ class SpanRepr(ABC, nn.Module):
             self.proj = nn.Linear(input_dim, proj_dim)
 
     @abstractmethod
-    def forward(self, encoded_input, start_ids_1, end_ids_1, query_batch_idx, start_ids_2, end_ids_2):
+    def forward(self, flag, encoded_input, start_ids_1, end_ids_1, query_batch_idx, start_ids_2, end_ids_2):
         raise NotImplementedError
 
     def get_input_dim(self):
@@ -46,7 +46,7 @@ class ComplexSpanRepr(ABC, nn.Module):
         self.nlayer = nlayer
 
     @abstractmethod
-    def forward(self, encoded_input, start_ids_1, end_ids_1, query_batch_idx, start_ids_2, end_ids_2):
+    def forward(self, flag, encoded_input, start_ids_1, end_ids_1, query_batch_idx, start_ids_2, end_ids_2):
         raise NotImplementedError
 
     def get_input_dim(self):
@@ -60,7 +60,7 @@ class ComplexSpanRepr(ABC, nn.Module):
 class MeanSpanRepr(SpanRepr, nn.Module):
     """Class implementing the mean span representation."""
 
-    def forward(self, encoded_input, start_ids_1, end_ids_1, query_batch_idx, start_ids_2, end_ids_2):
+    def forward(self, flag, encoded_input, start_ids_1, end_ids_1, query_batch_idx, start_ids_2, end_ids_2):
         if self.use_proj:
             encoded_input = self.proj(encoded_input)
 
@@ -89,7 +89,7 @@ class MeanSpanRepr(SpanRepr, nn.Module):
 class EndPointRepr(SpanRepr, nn.Module):
     """Class implementing the diff span representation - [h_j; h_i]"""
 
-    def forward(self, encoded_input, start_ids_1, end_ids_1, query_batch_idx, start_ids_2, end_ids_2):
+    def forward(self, flag, encoded_input, start_ids_1, end_ids_1, query_batch_idx, start_ids_2, end_ids_2):
         if self.use_proj:
             encoded_input = self.proj(encoded_input)
 
@@ -117,7 +117,7 @@ class EndPointRepr(SpanRepr, nn.Module):
 class DiffSumSpanRepr(SpanRepr, nn.Module):
     """Class implementing the diff_sum span representation - [h_j - h_i; h_j + h_i]"""
 
-    def forward(self, encoded_input, start_ids_1, end_ids_1, query_batch_idx, start_ids_2, end_ids_2):
+    def forward(self, flag, encoded_input, start_ids_1, end_ids_1, query_batch_idx, start_ids_2, end_ids_2):
         if self.use_proj:
             encoded_input = self.proj(encoded_input)
         
@@ -145,7 +145,7 @@ class DiffSumSpanRepr(SpanRepr, nn.Module):
 class MaxSpanRepr(SpanRepr, nn.Module):
     """Class implementing the max-pool span representation."""
 
-    def forward(self, encoded_input, start_ids_1, end_ids_1, query_batch_idx, start_ids_2, end_ids_2):
+    def forward(self, flag, encoded_input, start_ids_1, end_ids_1, query_batch_idx, start_ids_2, end_ids_2):
         if self.use_proj:
             encoded_input = self.proj(encoded_input)
 
@@ -155,6 +155,11 @@ class MaxSpanRepr(SpanRepr, nn.Module):
         for i in range(seq):
             tmp_encoded_input = (torch.maximum(encoded_input[:, i:, :], tmp_encoded_input[:, 0:seq - i, :])).float()
             span_repr[:, range(seq - i), range(i, seq), :] = tmp_encoded_input
+        
+        print("nan in max-pooling: ", torch.isnan(span_repr).any())
+        if torch.isnan(span_repr).any():
+            print("input: ", encoded_input)
+            print("span_repr: ", span_repr)
         
         if start_ids_2 == None:
             res = span_repr[query_batch_idx, start_ids_1, end_ids_1, :]
@@ -218,7 +223,7 @@ class AttnSpanRepr(SpanRepr, nn.Module):
         # self.attention_params.weight.data.fill_(0)
         # self.attention_params.bias.data.fill_(0)
 
-    def forward(self, encoded_input, start_ids_1, end_ids_1, query_batch_idx, start_ids_2, end_ids_2):
+    def forward(self, flag, encoded_input, start_ids_1, end_ids_1, query_batch_idx, start_ids_2, end_ids_2):
         if self.use_proj:
             encoded_input = self.proj(encoded_input)
 
@@ -272,7 +277,7 @@ class FullyConnectSpanRepr(ComplexSpanRepr, nn.Module):
         trans_layernorm = nn.LayerNorm(self.output_dim)
         self.trans = nn.TransformerEncoder(trans_encoder_layer, num_layers=self.nlayer, norm=trans_layernorm)
 
-    def forward(self, encoded_input, start_ids_1, end_ids_1, query_batch_idx, start_ids_2, end_ids_2):
+    def forward(self, flag, encoded_input, start_ids_1, end_ids_1, query_batch_idx, start_ids_2, end_ids_2):
         if self.use_proj:
             encoded_input = self.proj(encoded_input)
         
@@ -361,9 +366,12 @@ class AttnSchemaSpanRepr(ComplexSpanRepr, nn.Module):
         trans_layernorm = nn.LayerNorm(self.output_dim)
         self.trans = myTransformerEncoder(trans_encoder_layer, num_layers=self.nlayer, norm=trans_layernorm)
 
-    def forward(self, encoded_input, start_ids_1, end_ids_1, query_batch_idx, start_ids_2, end_ids_2):
+    def forward(self, flag, encoded_input, start_ids_1, end_ids_1, query_batch_idx, start_ids_2, end_ids_2):
         if self.use_proj:
             encoded_input = self.proj(encoded_input)
+        
+        if flag:
+            print("encoded_input: ", encoded_input)
         
         if self.method == 'max':
             tmp_encoded_input = encoded_input
@@ -372,6 +380,10 @@ class AttnSchemaSpanRepr(ComplexSpanRepr, nn.Module):
             for i in range(seq):
                 tmp_encoded_input = (torch.maximum(encoded_input[:, i:, :], tmp_encoded_input[:, 0:seq - i, :])).float()
                 span_repr[:, range(seq - i), range(i, seq), :] = tmp_encoded_input
+        
+            if flag:
+                print("span_repr: ", span_repr)
+
         elif self.method == 'mean':
             tmp_encoded_input = encoded_input
             bsz, seq, hd = encoded_input.size()
@@ -410,8 +422,10 @@ class AttnSchemaSpanRepr(ComplexSpanRepr, nn.Module):
         
         bsz, seq, _, hd = span_repr.size()
 
-        if torch.isnan(span_repr).any():
-            print("nan in max-pooling")
+        # print("nan in max-pooling: ", torch.isnan(span_repr).any())
+        # if torch.isnan(span_repr).any():
+        #     print("input: ", encoded_input)
+        #     print("span_repr: ", span_repr)
 
         trans_repr = span_repr.reshape(bsz, seq * seq, hd)
         span_repr = self.trans(trans_repr.permute(1, 0, 2), attn_pattern=self.attn_schema).permute(1, 0, 2)
@@ -433,7 +447,7 @@ class AttnSchemaSpanRepr(ComplexSpanRepr, nn.Module):
         return self.output_dim
 
 
-def get_span_module(input_dim, method="mean", use_proj=False, proj_dim=256, attn_schema=['none'], nhead=2, nlayer=2):
+def get_span_module(input_dim, method="max", use_proj=False, proj_dim=256, attn_schema=['none'], nhead=2, nlayer=2):
     """Initializes the appropriate span representation class and returns the object.
     """
     if attn_schema == ['none']:

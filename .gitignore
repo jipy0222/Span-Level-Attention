@@ -6,6 +6,8 @@ util/__pycache__/
 exp/
 attnexp/
 ontonotes/
+baseline/
+trail/
 train.slurm
 **.err
 **.out
