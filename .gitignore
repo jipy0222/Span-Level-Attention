@@ -11,3 +11,5 @@ trail/
 train.slurm
 **.err
 **.out
+baseline/
+trail/
