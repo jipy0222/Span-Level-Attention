@@ -332,164 +332,63 @@ def grouppadding_subprocess(q_repr, k_repr, v_repr, lenlist, pattern_mask, tempf
     return attn_output, lenmask_attn
 
 
-def subprocess(q_repr, k_repr, v_repr, pattern, num_heads, head_dim):
+def subprocess(q_repr, k_repr, pattern):
     
-    bsz, tgt_len, embed_dim = q_repr.shape
-    seq = int(math.sqrt(tgt_len))
+    expand_bsz, seq, _, head_dim = q_repr.shape
     
     if pattern == 'insidetoken':
         
-        insidetokenquery = q_repr.reshape(bsz, seq, seq, embed_dim).unsqueeze(-2)
-        insidetokenquery = insidetokenquery / math.sqrt(insidetokenquery.shape[-1])
-        insidetokenquery = insidetokenquery.permute(1,2,3,0,4)
-
-        token_mask = torch.diag(torch.ones(seq)).to(q_repr.device)
-        token_mask = torch.broadcast_to(token_mask[None, ...], (bsz, seq, seq))
-        
-        insidetokenkey = k_repr.reshape(bsz, seq, seq, embed_dim)
-        insidetokenkey = insidetokenkey[token_mask == 1].reshape(bsz, seq, embed_dim)
-        insidetokenkey = torch.broadcast_to(insidetokenkey[:, None, None, ...], (bsz, seq, seq, seq, embed_dim))
-        insidetokenkey = insidetokenkey.permute(1,2,3,0,4)
-        
-        insidetokenvalue = v_repr.reshape(bsz, seq, seq, embed_dim)
-        insidetokenvalue = insidetokenvalue[token_mask == 1].reshape(bsz, seq, embed_dim)
-        insidetokenvalue = torch.broadcast_to(insidetokenvalue[:, None, None, ...], (bsz, seq, seq, seq, embed_dim))
-        insidetokenvalue = insidetokenvalue.permute(1,2,3,0,4)
+        attn_score = torch.einsum("bijm, bkkm -> bijk", q_repr, k_repr)
 
         pmask = torch.triu(torch.ones(seq, seq), diagonal=0)
-        pmask = torch.broadcast_to(pmask[None, ..., None], (bsz, seq, seq, seq))
+        pmask = torch.broadcast_to(pmask[..., None], (seq, seq, seq))
         mask1 = torch.tril(torch.ones(seq, seq), diagonal=0)
-        mask1 = torch.broadcast_to(mask1[None, None, ...], (bsz, seq, seq, seq))
+        mask1 = torch.broadcast_to(mask1[None, ...], (seq, seq, seq))
         mask2 = torch.triu(torch.ones(seq, seq), diagonal=0)
-        mask2 = torch.broadcast_to(mask2[None, None, ...], (bsz, seq, seq, seq)).transpose(1,2)
+        mask2 = torch.broadcast_to(mask2[:, None, :], (seq, seq, seq))
         mask = ((pmask == 0) | ((mask1 == 1) & (mask2 == 1))).to(q_repr.device)
-        mask = torch.broadcast_to(mask[:, None, ...], (bsz, num_heads, seq, seq, seq)).reshape(bsz*num_heads, seq, seq, seq)
 
-        insidetokenquery = insidetokenquery.contiguous().view(seq, seq, 1, bsz * num_heads, head_dim).permute(3, 0, 1, 2, 4)
-        insidetokenkey = insidetokenkey.contiguous().view(seq, seq, seq, bsz * num_heads, head_dim).permute(3, 0, 1, 2, 4)
-        insidetokenvalue = insidetokenvalue.contiguous().view(seq, seq, seq, bsz * num_heads, head_dim).permute(3, 0, 1, 2, 4)
-
-        # convert above into einsum version
-        attn_score = torch.einsum("bijkm, bijkm -> bijk", insidetokenquery, insidetokenkey)
         attn_score = attn_score.masked_fill(~mask, float("-inf"))
-
-        return attn_score, insidetokenvalue
+ 
+        return attn_score
 
     elif pattern == 'samehandt':
-        
-        samehandtquery = q_repr.reshape(bsz, seq, seq, embed_dim)
-        samehandtquery = samehandtquery / math.sqrt(samehandtquery.shape[-1])
-        samehandtquery = samehandtquery.permute(1,2,0,3)
 
-        samehandtkey = k_repr.reshape(bsz, seq, seq, embed_dim)
-        samehandtkey = samehandtkey.permute(1,2,0,3)
+        left_attn_score = torch.einsum("bijm, bkjm -> bijk", q_repr, k_repr)
+        left_mask = 1-torch.tril(torch.ones(seq, seq), diagonal=0).to(q_repr.device)
+        left_mask = torch.broadcast_to(left_mask[None, ...], (seq, seq, seq))
 
-        samehandtvalue = v_repr.reshape(bsz, seq, seq, embed_dim)
-        samehandtvalue = samehandtvalue.permute(1,2,0,3)
-        
-        samehandtquery = samehandtquery.contiguous().view(seq, seq, bsz * num_heads, head_dim).permute(2, 0, 1, 3)
-        samehandtkey = samehandtkey.contiguous().view(seq, seq, bsz * num_heads, head_dim).permute(2, 0, 1, 3)
-        samehandtvalue = samehandtvalue.contiguous().view(seq, seq, bsz * num_heads, head_dim).permute(2, 0, 1, 3)
+        right_attn_score = torch.einsum("bijm, bikm -> bijk", q_repr, k_repr)
+        right_mask = 1-torch.triu(torch.ones(seq, seq), diagonal=0).to(q_repr.device)
+        right_mask = torch.broadcast_to(right_mask[:, None, :], (seq, seq, seq))
 
-        # einsum version attn-score
-        right_attn_score = torch.einsum("bijm, bikm -> bijk", samehandtquery, samehandtkey)
-
-        # generate mask, where k < i is 1, other 0
-        right_mask = 1-torch.triu(torch.ones(seq, seq), diagonal=0)
-        right_mask = torch.broadcast_to(right_mask[None, None, ...], (bsz, seq, seq, seq)).transpose(1,2).to(q_repr.device)
-        right_mask = torch.broadcast_to(right_mask[:, None, ...], (bsz, num_heads, seq, seq, seq)).reshape(bsz*num_heads, seq, seq, seq)
-
-        # einsum version attn-score
-        left_attn_score = torch.einsum("bijm, bkjm -> bijk", samehandtquery, samehandtkey)
-
-        # generate mask, where k > j is 1, other 0
-        left_mask = 1-torch.tril(torch.ones(seq, seq), diagonal=0)
-        left_mask = torch.broadcast_to(left_mask[None, None, ...], (bsz, seq, seq, seq)).to(q_repr.device)
-        left_mask = torch.broadcast_to(left_mask[:, None, ...], (bsz, num_heads, seq, seq, seq)).reshape(bsz*num_heads, seq, seq, seq)
-
-        # concate
         attn_score = torch.cat([left_attn_score, right_attn_score], dim=3)
-        mask = torch.cat([left_mask, right_mask], dim=3)
+        mask = torch.cat([left_mask, right_mask], dim=2)
         attn_score = attn_score.masked_fill(mask == 1, float("-inf"))
 
-        left_samehandtvalue = torch.broadcast_to(samehandtvalue[..., None, :], (bsz*num_heads, seq, seq, seq, head_dim)).permute(0, 3, 2, 1, 4)
-        right_samehandtvalue = torch.broadcast_to(samehandtvalue[..., None, :], (bsz*num_heads, seq, seq, seq, head_dim)).permute(0, 1, 3, 2, 4)
-
-        complete_samehandtvalue = torch.cat([left_samehandtvalue, right_samehandtvalue], dim=3)
-
-        return attn_score, complete_samehandtvalue
+        return attn_score
 
     elif pattern == 'sibling':
-        
-        siblingquery = q_repr.reshape(bsz, seq, seq, embed_dim)
-        siblingquery = siblingquery / math.sqrt(siblingquery.shape[-1])
-        siblingquery = siblingquery.permute(1,2,0,3)
 
-        siblingkey = k_repr.reshape(bsz, seq, seq, embed_dim)
-        siblingkey = siblingkey.permute(1,2,0,3)
+        left_attn_score = torch.einsum("bijm, bkim -> bijk", q_repr, k_repr)
+        left_mask = 1-torch.tril(torch.ones(seq, seq), diagonal=0).to(q_repr.device)
+        left_mask = torch.broadcast_to(left_mask[:, None, :], (seq, seq, seq))
 
-        siblingvalue = v_repr.reshape(bsz, seq, seq, embed_dim)
-        siblingvalue = siblingvalue.permute(1,2,0,3)
-        
-        siblingquery = siblingquery.contiguous().view(seq, seq, bsz * num_heads, head_dim).permute(2, 0, 1, 3)
-        siblingkey = siblingkey.contiguous().view(seq, seq, bsz * num_heads, head_dim).permute(2, 0, 1, 3)
-        siblingvalue = siblingvalue.contiguous().view(seq, seq, bsz * num_heads, head_dim).permute(2, 0, 1, 3)
+        right_attn_score = torch.einsum("bijm, bjkm -> bijk", q_repr, k_repr)
+        right_mask = 1-torch.triu(torch.ones(seq, seq), diagonal=0).to(q_repr.device)
+        right_mask = torch.broadcast_to(right_mask[None, ...], (seq, seq, seq))
 
-        # einsum version attn-score
-        right_attn_score = torch.einsum("bijm, bjkm -> bijk", siblingquery, siblingkey)
-
-        # generate mask, where k < j is 1, other 0
-        right_mask = 1-torch.triu(torch.ones(seq, seq), diagonal=0)
-        right_mask = torch.broadcast_to(right_mask[None, None, ...], (bsz, seq, seq, seq)).to(q_repr.device)
-        right_mask = torch.broadcast_to(right_mask[:, None, ...], (bsz, num_heads, seq, seq, seq)).reshape(bsz*num_heads, seq, seq, seq)
-
-        # einsum version attn-score
-        left_attn_score = torch.einsum("bijm, bkim -> bijk", siblingquery, siblingkey)
-
-        # generate mask, where k > i is 1, other 0
-        left_mask = 1-torch.tril(torch.ones(seq, seq), diagonal=0)
-        left_mask = torch.broadcast_to(left_mask[None, None, ...], (bsz, seq, seq, seq)).transpose(1,2).to(q_repr.device)
-        left_mask = torch.broadcast_to(left_mask[:, None, ...], (bsz, num_heads, seq, seq, seq)).reshape(bsz*num_heads, seq, seq, seq)
-
-        # concate
         attn_score = torch.cat([left_attn_score, right_attn_score], dim=3)
-        mask = torch.cat([left_mask, right_mask], dim=3)
+        mask = torch.cat([left_mask, right_mask], dim=2)
         attn_score = attn_score.masked_fill(mask == 1, float("-inf"))
 
-        left_siblingvalue = torch.broadcast_to(siblingvalue[..., None, :], (bsz*num_heads, seq, seq, seq, head_dim)).permute(0, 2, 3, 1, 4)
-        right_siblingvalue = torch.broadcast_to(siblingvalue[:, None, ...], (bsz*num_heads, seq, seq, seq, head_dim))
-
-        complete_siblingvalue = torch.cat([left_siblingvalue, right_siblingvalue], dim=3)
-
-        return attn_score, complete_siblingvalue
+        return attn_score
 
     elif pattern == 'alltoken':
-        
-        alltokenquery = q_repr.reshape(bsz, seq, seq, embed_dim).unsqueeze(-2)
-        alltokenquery = alltokenquery / math.sqrt(alltokenquery.shape[-1])
-        alltokenquery = alltokenquery.permute(1,2,3,0,4)
 
-        token_mask = torch.diag(torch.ones(seq)).to(q_repr.device)
-        token_mask = torch.broadcast_to(token_mask[None, ...], (bsz, seq, seq))
-        
-        alltokenkey = k_repr.reshape(bsz, seq, seq, embed_dim)
-        alltokenkey = alltokenkey[token_mask == 1].reshape(bsz, seq, embed_dim)
-        alltokenkey = torch.broadcast_to(alltokenkey[:, None, None, ...], (bsz, seq, seq, seq, embed_dim))
-        alltokenkey = alltokenkey.permute(1,2,3,0,4)
-        
-        alltokenvalue = v_repr.reshape(bsz, seq, seq, embed_dim)
-        alltokenvalue = alltokenvalue[token_mask == 1].reshape(bsz, seq, embed_dim)
-        alltokenvalue = torch.broadcast_to(alltokenvalue[:, None, None, ...], (bsz, seq, seq, seq, embed_dim))
-        alltokenvalue = alltokenvalue.permute(1,2,3,0,4)
+        attn_score = torch.einsum("bijm, bkkm -> bijk", q_repr, k_repr)
 
-        alltokenquery = alltokenquery.contiguous().view(seq, seq, 1, bsz * num_heads, head_dim).permute(3, 0, 1, 2, 4)
-        alltokenkey = alltokenkey.contiguous().view(seq, seq, seq, bsz * num_heads, head_dim).permute(3, 0, 1, 2, 4)
-        alltokenvalue = alltokenvalue.contiguous().view(seq, seq, seq, bsz * num_heads, head_dim).permute(3, 0, 1, 2, 4)
-
-        # convert above into einsum version
-        attn_score = torch.einsum("bijkm, bijkm -> bijk", alltokenquery, alltokenkey)
-
-        return attn_score, alltokenvalue
+        return attn_score
 
 
 def mymulti_head_attention_forward(
@@ -592,7 +491,6 @@ def mymulti_head_attention_forward(
 
     # initial complete attention output
     seq = int(math.sqrt(tgt_len))
-    complete_attn_output = torch.zeros([bsz, seq, seq, embed_dim], device=query.device)
 
     # compute in-projection
     if not use_separate_proj_weight:
@@ -609,9 +507,10 @@ def mymulti_head_attention_forward(
         q, k, v = _in_projection(query, key, value, q_proj_weight, k_proj_weight, v_proj_weight, b_q, b_k, b_v)
     # q, k, v: (seq*seq, bsz, embed_dim) batch_inside_order: lexico order. 
 
-    q_repr = q.transpose(0, 1) # bsz, seq*seq, hd
-    k_repr = k.transpose(0, 1) # bsz, seq*seq, hd
-    v_repr = v.transpose(0, 1) # bsz, seq*seq, hd
+    q_repr = q.contiguous().view(seq, seq, bsz*num_heads, head_dim).permute(2,0,1,3)
+    q_repr = q_repr / math.sqrt(q_repr.shape[-1])
+    k_repr = k.contiguous().view(seq, seq, bsz*num_heads, head_dim).permute(2,0,1,3)
+    v_repr = v.contiguous().view(seq, seq, bsz*num_heads, head_dim).permute(2,0,1,3)
 
     # print("q_repr", q_repr)
     # print("k_repr", k_repr)
@@ -620,18 +519,271 @@ def mymulti_head_attention_forward(
     # print("k_repr_size", k_repr.shape)
     # print("v_repr_size", v_repr.shape)
 
-    attn_score, attn_value = None, None
+    attn_score_list = []
     for pattern in attn_pattern:
-        tmp_attn_score, tmp_attn_value = subprocess(q_repr, k_repr, v_repr, pattern, num_heads, head_dim)
-        if attn_score == None:
-            attn_score = tmp_attn_score
-            attn_value = tmp_attn_value
-        else:
-            attn_score = torch.cat([attn_score, tmp_attn_score], dim=-1) # bsz*num_heads, seq, seq, numofpattern
-            attn_value = torch.cat([attn_value, tmp_attn_value], dim=-2) # bsz*num_heads, seq, seq, numofpattern, head_dim
+        tmp_attn_score = subprocess(q_repr, k_repr, pattern)
+        attn_score_list.append(tmp_attn_score)
+
+    attn_score = torch.cat(attn_score_list, dim=-1) # bsz*num_heads, seq, seq, numofpattern
     attn_score = attn_score.softmax(dim=-1)
     attn_score = F.dropout(attn_score, p=dropout_p)
-    attn_output = torch.einsum("bijk, bijkm -> bijm", attn_score, attn_value) # bsz*num_heads, seq, seq, head_dim
+
+    # pivot = 0
+    # attn_output = None
+    # for pattern in attn_pattern:
+        
+    #     if pattern == 'insidetoken':
+            
+    #         sub_attn_score = attn_score[..., pivot:pivot+seq]
+            
+    #         sub_attn_output = torch.einsum("bijk, bkkm -> bijm", sub_attn_score, v_repr)
+            
+    #         if attn_output == None:
+    #             attn_output = sub_attn_output
+    #         else:
+    #             attn_output = attn_output + sub_attn_output
+            
+    #         pivot = pivot + seq
+
+    #     elif pattern == 'samehandt':
+            
+    #         sub_left_score = attn_score[..., pivot:pivot+seq]
+    #         sub_right_score = attn_score[..., pivot+seq:pivot+2*seq]
+
+    #         left_attn_output = torch.einsum("bijk, bkjm -> bijm", sub_left_score, v_repr)
+    #         right_attn_output = torch.einsum("bijk, bikm -> bijm", sub_right_score, v_repr)
+    #         sub_attn_output = left_attn_output + right_attn_output
+            
+    #         if attn_output == None:
+    #             attn_output = sub_attn_output
+    #         else:
+    #             attn_output = attn_output + sub_attn_output
+            
+    #         pivot = pivot + 2*seq
+
+    #     elif pattern == 'sibling':
+
+    #         sub_left_score = attn_score[..., pivot:pivot+seq]
+    #         sub_right_score = attn_score[..., pivot+seq:pivot+2*seq]
+
+    #         left_attn_output = torch.einsum("bijk, bkim -> bijm", sub_left_score, v_repr)
+    #         right_attn_output = torch.einsum("bijk, bjkm -> bijm", sub_right_score, v_repr)
+    #         sub_attn_output = left_attn_output + right_attn_output
+            
+    #         if attn_output == None:
+    #             attn_output = sub_attn_output
+    #         else:
+    #             attn_output = attn_output + sub_attn_output
+            
+    #         pivot = pivot + 2*seq
+
+    #     elif pattern == 'alltoken':
+            
+    #         sub_attn_score = attn_score[..., pivot:pivot+seq]
+            
+    #         sub_attn_output = torch.einsum("bijk, bkkm -> bijm", sub_attn_score, v_repr)
+
+    #         if attn_output == None:
+    #             attn_output = sub_attn_output
+    #         else:
+    #             attn_output = attn_output + sub_attn_output
+            
+    #         pivot = pivot + seq
+    
+    pivot = 0
+    attn_output = torch.zeros(bsz*num_heads, seq, seq, head_dim).to(v_repr.device)
+    attn_score_split = torch.split(attn_score, seq, dim=-1)
+    for pattern in attn_pattern:
+        
+        if pattern == 'insidetoken':
+            
+            sub_attn_score = attn_score_split[pivot]
+            
+            sub_attn_output = torch.einsum("bijk, bkkm -> bijm", sub_attn_score, v_repr)
+            
+            attn_output = attn_output + sub_attn_output
+
+            pivot += 1
+
+        elif pattern == 'samehandt':
+            
+            sub_left_score = attn_score_split[pivot]
+            sub_right_score = attn_score_split[pivot+1]
+
+            left_attn_output = torch.einsum("bijk, bkjm -> bijm", sub_left_score, v_repr)
+            right_attn_output = torch.einsum("bijk, bikm -> bijm", sub_right_score, v_repr)
+            sub_attn_output = left_attn_output + right_attn_output
+            
+            attn_output = attn_output + sub_attn_output
+            
+            pivot += 2
+
+        elif pattern == 'sibling':
+
+            sub_left_score = attn_score_split[pivot]
+            sub_right_score = attn_score_split[pivot+1]
+
+            left_attn_output = torch.einsum("bijk, bkim -> bijm", sub_left_score, v_repr)
+            right_attn_output = torch.einsum("bijk, bjkm -> bijm", sub_right_score, v_repr)
+            sub_attn_output = left_attn_output + right_attn_output
+            
+            attn_output = attn_output + sub_attn_output
+            
+            pivot += 2
+
+        elif pattern == 'alltoken':
+            
+            sub_attn_score = attn_score_split[pivot]
+            
+            sub_attn_output = torch.einsum("bijk, bkkm -> bijm", sub_attn_score, v_repr)
+
+            attn_output = attn_output + sub_attn_output
+            
+            pivot += 1
+
+    # attn_output: bsz*num_heads, seq, seq, head_dim
+    attn_output = attn_output.permute(1,2,0,3).contiguous().view(seq, seq, bsz, embed_dim).permute(2,0,1,3)
+    attn_output = F.linear(attn_output, out_proj_weight, out_proj_bias)
+    attn_output = attn_output.reshape(bsz, seq*seq, embed_dim).transpose(0, 1)
+
+    if need_weights:
+        # optionally average attention weights over heads
+        raise RuntimeError("Have not fill attention weights and do reverse on them.")
+    else:
+        if not is_batched:
+            raise RuntimeError("Will not allow non-batched input.")
+        return attn_output, None
+
+
+def mymulti_head_attention_alltoken_forward(
+    query: Tensor,
+    key: Tensor,
+    value: Tensor,
+    embed_dim_to_check: int,
+    num_heads: int,
+    in_proj_weight: Optional[Tensor],
+    in_proj_bias: Optional[Tensor],
+    dropout_p: float,
+    out_proj_weight: Tensor,
+    out_proj_bias: Optional[Tensor],
+    training: bool = True,
+    need_weights: bool = True,
+    attn_pattern: list = ["insidetoken"],
+    use_separate_proj_weight: bool = False,
+    q_proj_weight: Optional[Tensor] = None,
+    k_proj_weight: Optional[Tensor] = None,
+    v_proj_weight: Optional[Tensor] = None,
+    average_attn_weights: bool = False,
+) -> Tuple[Tensor, Optional[Tensor]]:
+    r"""
+    Args:
+        query, key, value: map a query and a set of key-value pairs to an output.
+            See "Attention Is All You Need" for more details.
+        embed_dim_to_check: total dimension of the model.
+        num_heads: parallel attention heads.
+        in_proj_weight, in_proj_bias: input projection weight and bias.
+        dropout_p: probability of an element to be zeroed.
+        out_proj_weight, out_proj_bias: the output projection weight and bias.
+        training: apply dropout if is ``True``.
+        key_padding_mask: if provided, specified padding elements in the key will
+            be ignored by the attention. This is an binary mask. When the value is True,
+            the corresponding value on the attention layer will be filled with -inf.
+        need_weights: output attn_output_weights.
+        attn_mask: 2D or 3D mask that prevents attention to certain positions. A 2D mask will be broadcasted for all
+            the batches while a 3D mask allows to specify a different mask for the entries of each batch.
+        use_separate_proj_weight: the function accept the proj. weights for query, key,
+            and value in different forms. If false, in_proj_weight will be used, which is
+            a combination of q_proj_weight, k_proj_weight, v_proj_weight.
+        q_proj_weight, k_proj_weight, v_proj_weight, in_proj_bias: input projection weight and bias.
+        average_attn_weights: If true, indicates that the returned ``attn_weights`` should be averaged across heads.
+            Otherwise, ``attn_weights`` are provided separately per head. Note that this flag only has an effect
+            when ``need_weights=True.``. Default: True
+
+
+    Shape:
+        Inputs:
+        - query: :math:`(L, E)` or :math:`(L, N, E)` where L is the target sequence length, N is the batch size, E is
+          the embedding dimension.
+        - key: :math:`(S, E)` or :math:`(S, N, E)`, where S is the source sequence length, N is the batch size, E is
+          the embedding dimension.
+        - value: :math:`(S, E)` or :math:`(S, N, E)` where S is the source sequence length, N is the batch size, E is
+          the embedding dimension.
+        - key_padding_mask: :math:`(S)` or :math:`(N, S)` where N is the batch size, S is the source sequence length.
+          If a ByteTensor is provided, the non-zero positions will be ignored while the zero positions
+          will be unchanged. If a BoolTensor is provided, the positions with the
+          value of ``True`` will be ignored while the position with the value of ``False`` will be unchanged.
+        - attn_mask: 2D mask :math:`(L, S)` where L is the target sequence length, S is the source sequence length.
+          3D mask :math:`(N*num_heads, L, S)` where N is the batch size, L is the target sequence length,
+          S is the source sequence length. attn_mask ensures that position i is allowed to attend the unmasked
+          positions. If a ByteTensor is provided, the non-zero positions are not allowed to attend
+          while the zero positions will be unchanged. If a BoolTensor is provided, positions with ``True``
+          are not allowed to attend while ``False`` values will be unchanged. If a FloatTensor
+          is provided, it will be added to the attention weight.
+
+        Outputs:
+        - attn_output: :math:`(L, E)` or :math:`(L, N, E)` where L is the target sequence length, N is the batch size,
+          E is the embedding dimension.
+        - attn_output_weights: Only returned when ``need_weights=True``. If ``average_attn_weights=True``, returns
+          attention weights averaged across heads of shape :math:`(L, S)` when input is unbatched or
+          :math:`(N, L, S)`, where :math:`N` is the batch size, :math:`L` is the target sequence length, and
+          :math:`S` is the source sequence length. If ``average_weights=False``, returns attention weights per
+          head of shape :math:`(num_heads, L, S)` when input is unbatched or :math:`(N, num_heads, L, S)`.
+    """
+    # print("entering mymulti_head_attention_alltoken_forward()")
+
+    is_batched = _mha_shape_check(query, key, value, num_heads)
+    assert attn_pattern == ['alltoken']
+
+    if not is_batched:
+        raise RuntimeError("Will not allow non-batched input.")
+
+    # set up shape vars
+    tgt_len, bsz, embed_dim = query.shape
+    assert embed_dim == embed_dim_to_check, \
+        f"was expecting embedding dimension of {embed_dim_to_check}, but got {embed_dim}"
+    head_dim = embed_dim // num_heads
+    assert head_dim * num_heads == embed_dim, f"embed_dim {embed_dim} not divisible by num_heads {num_heads}"
+    if use_separate_proj_weight:
+        # allow MHA to have different embedding dimensions when separate projection weights are used
+        assert key.shape[:2] == value.shape[:2], \
+            f"key's sequence and batch dims {key.shape[:2]} do not match value's {value.shape[:2]}"
+    else:
+        assert key.shape == value.shape, f"key shape {key.shape} does not match value shape {value.shape}"
+
+    # adjust dropout probability
+    if not training:
+        dropout_p = 0.0
+
+    # initial complete attention output
+    seq = int(math.sqrt(tgt_len))
+
+    # compute in-projection
+    if not use_separate_proj_weight:
+        assert in_proj_weight is not None, "use_separate_proj_weight is False but in_proj_weight is None"
+        q, k, v = _in_projection_packed(query, key, value, in_proj_weight, in_proj_bias)
+    else:
+        assert q_proj_weight is not None, "use_separate_proj_weight is True but q_proj_weight is None"
+        assert k_proj_weight is not None, "use_separate_proj_weight is True but k_proj_weight is None"
+        assert v_proj_weight is not None, "use_separate_proj_weight is True but v_proj_weight is None"
+        if in_proj_bias is None:
+            b_q = b_k = b_v = None
+        else:
+            b_q, b_k, b_v = in_proj_bias.chunk(3)
+        q, k, v = _in_projection(query, key, value, q_proj_weight, k_proj_weight, v_proj_weight, b_q, b_k, b_v)
+    # q, k, v: (seq*seq, bsz, embed_dim) batch_inside_order: lexico order. 
+
+    q_repr = q.contiguous().view(seq, seq, bsz*num_heads, head_dim).permute(2,0,1,3)
+    q_repr = q_repr / math.sqrt(q_repr.shape[-1])
+    k_repr = k.contiguous().view(seq, seq, bsz*num_heads, head_dim).permute(2,0,1,3)
+    v_repr = v.contiguous().view(seq, seq, bsz*num_heads, head_dim).permute(2,0,1,3)
+
+    attn_score = torch.einsum("bijm, bkkm -> bijk", q_repr, k_repr)
+    attn_score = attn_score.softmax(dim=-1)
+    attn_score = F.dropout(attn_score, p=dropout_p)
+
+    attn_output = torch.einsum("bijk, bkkm -> bijm", attn_score, v_repr)
+
+    # attn_output: bsz*num_heads, seq, seq, head_dim
     attn_output = attn_output.permute(1,2,0,3).contiguous().view(seq, seq, bsz, embed_dim).permute(2,0,1,3)
     attn_output = F.linear(attn_output, out_proj_weight, out_proj_bias)
     attn_output = attn_output.reshape(bsz, seq*seq, embed_dim).transpose(0, 1)
@@ -776,13 +928,6 @@ class myMultiheadAttention(Module):
                     value = key
             else:
                 query, key, value = [x.transpose(1, 0) for x in (query, key, value)]
-        
-        # print("query: ", query)
-        # print("key: ", key)
-        # print("value: ", value)
-        # print("query_size: ", query.size())
-        # print("key_size: ", key.size())
-        # print("value_size: ", value.size())
 
         if not self._qkv_same_embed_dim:
             attn_output, attn_output_weights = mymulti_head_attention_forward(
@@ -791,9 +936,10 @@ class myMultiheadAttention(Module):
                 self.dropout, self.out_proj.weight, self.out_proj.bias,
                 training=self.training,
                 need_weights=need_weights,
-                attn_pattern=attn_pattern, use_separate_proj_weight=True,
-                q_proj_weight=self.q_proj_weight, k_proj_weight=self.k_proj_weight,
-                v_proj_weight=self.v_proj_weight, average_attn_weights=average_attn_weights)
+                attn_pattern=attn_pattern, 
+                use_separate_proj_weight=True,
+                q_proj_weight=self.q_proj_weight, k_proj_weight=self.k_proj_weight, v_proj_weight=self.v_proj_weight, 
+                average_attn_weights=average_attn_weights)
         else:
             attn_output, attn_output_weights = mymulti_head_attention_forward(
                 query, key, value, self.embed_dim, self.num_heads,
@@ -801,7 +947,8 @@ class myMultiheadAttention(Module):
                 self.dropout, self.out_proj.weight, self.out_proj.bias,
                 training=self.training,
                 need_weights=need_weights,
-                attn_pattern=attn_pattern, average_attn_weights=average_attn_weights)
+                attn_pattern=attn_pattern, 
+                average_attn_weights=average_attn_weights)
         if self.batch_first and is_batched:
             return attn_output.transpose(1, 0), attn_output_weights
         else:
@@ -939,12 +1086,13 @@ class myTransformerEncoder(Module):
 
         return output
 
+
 if __name__ == "__main__":
     # test
     # src = torch.arange(72).reshape(9,2,4).float()
     src = torch.arange(392).reshape(49,2,4).float()
     print("self-defined_x: ", src)
     encoder_layer = myTransformerEncoderLayer(d_model=4, nhead=2)
-    transformer_encoder = myTransformerEncoder(encoder_layer, num_layers=1)
-    out = transformer_encoder(src, attn_pattern=['insidetoken']).transpose(0,1)
+    transformer_encoder = myTransformerEncoder(encoder_layer, num_layers=2)
+    out = transformer_encoder(src, attn_pattern=['samehandt', 'sibling', 'alltoken']).transpose(0,1)
     print("out: ", out)

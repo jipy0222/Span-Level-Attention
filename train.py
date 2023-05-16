@@ -8,9 +8,6 @@ import time
 import torch
 from torch.utils.tensorboard import SummaryWriter
 
-from nvitop import CudaDevice, ResourceMetricCollector
-from nvitop.callbacks.tensorboard import add_scalar_dict
-
 from encoders.pretrained_transformers import Encoder
 from model import SpanModel
 from data import SpanDataset
@@ -149,7 +146,7 @@ def create_parser():
     parser.add_argument('-exp_path', type=str, default='./exp')
     # shortcuts
     # experiment type
-    parser.add_argument('-task', type=str, default='nel', choices=('nel', 'ctl', 'coref', 'src'))
+    parser.add_argument('-task', type=str, default='nel', choices=('nel', 'ctl', 'coref', 'src', 'ctd', 'med'))
 
     # training setting
     parser.add_argument('-batch_size', type=int, default=32)
@@ -221,7 +218,7 @@ def main():
     args = process_args(args)
 
     set_seed(args.seed)
-    if args.task in ('ctl', 'nel'):
+    if args.task in ('ctl', 'nel', 'ctd', 'med'):
         num_spans = 1
     elif args.task in ('coref', 'src'):
         num_spans = 2
@@ -239,9 +236,6 @@ def main():
     logger.info(f"Model path: {model_path}")
 
     writer = SummaryWriter(log_dir=model_path)
-    collector = ResourceMetricCollector(devices=CudaDevice.all(),  # log all visible CUDA devices and use the CUDA ordinal
-                                        root_pids={os.getpid()},   # only log the descendant processes of the current process
-                                        interval=1.0)              # snapshot interval for background daemon thread
 
     #####################
     # create data sets, tokenizers, and data loaders
@@ -410,108 +404,95 @@ def main():
     for epoch in range(args.epochs):
         if terminate:
             break
-        with collector(tag='train'):
-            model.train()
-            cumulated_loss = cumulated_num = 0
-            # data_loader['train'].shuffle_self()
-            for step, batch in enumerate(data_loader['train']):
-                if terminate:
-                    break
-                with collector(tag='batch'):
-                    # ignore batches to recover the same data loader state of checkpoint
-                    if (epoch < args.start_epoch) or (epoch == args.start_epoch and step <= args.epoch_step):
-                        continue
+        model.train()
+        cumulated_loss = cumulated_num = 0
+        # data_loader['train'].shuffle_self()
+        for step, batch in enumerate(data_loader['train']):
+            if terminate:
+                break
+            # ignore batches to recover the same data loader state of checkpoint
+            if (epoch < args.start_epoch) or (epoch == args.start_epoch and step <= args.epoch_step):
+                continue
 
-                    loss = forward_batch(model, batch, mode='loss', use_argmax=args.use_argmax)
-                    actual_step = len(data_loader['train']) * epoch + step + 1
-                    # optimize model
-                    # why real_batch_size // batch_size?
-                    # because the batch size is the number of instances in a batch, but the optimizer
-                    # is called every real_batch_size instances
-                    # so we need to accumulate gradients for real_batch_size // batch_size steps
-                    if (actual_step - 1) % (args.real_batch_size // args.batch_size) == 0:
-                        optimizer.zero_grad()
+            loss = forward_batch(model, batch, mode='loss', use_argmax=args.use_argmax)
+            actual_step = len(data_loader['train']) * epoch + step + 1
+            # optimize model
+            # why real_batch_size // batch_size?
+            # because the batch size is the number of instances in a batch, but the optimizer
+            # is called every real_batch_size instances
+            # so we need to accumulate gradients for real_batch_size // batch_size steps
+            if (actual_step - 1) % (args.real_batch_size // args.batch_size) == 0:
+                optimizer.zero_grad()
 
-                    loss.backward()
+            loss.backward()
 
-                    if actual_step % (args.real_batch_size // args.batch_size) == 0:
-                        optimizer.step()
-                    # update metadata
-                    num_instances = len(batch['labels'])
-                    cumulated_loss += loss.item() * num_instances
-                    cumulated_num += num_instances
-                    # log
-                    if (actual_step % (args.real_batch_size // args.batch_size) == 0) and (
-                            actual_step // (args.real_batch_size // args.batch_size)) % args.log_step == 0:
-                        logger.info(
-                            f'Train '
-                            f'Epoch #{epoch} | Step {actual_step // (args.real_batch_size // args.batch_size)} | '
-                            f'loss {cumulated_loss / cumulated_num:8.4f}'
-                        )
-                    # validate
-                    if (actual_step % (args.real_batch_size // args.batch_size) == 0) and (
-                            actual_step // (args.real_batch_size // args.batch_size)) % args.eval_step == 0:
-                        model.eval()
-                        logger.info('-' * 80)
-                        with torch.no_grad():
-                            curr_f1, val_loss_step = validate(data_loader['development'], model, getloss=True, use_argmax=args.use_argmax)
-                        writer.add_scalar(tag="val_f1", scalar_value=curr_f1, global_step=actual_step // (args.real_batch_size // args.batch_size))
-                        writer.add_scalar(tag="val_loss_step", scalar_value=val_loss_step, global_step=actual_step // (args.real_batch_size // args.batch_size))
-                        logger.info(f'Validation F1 {curr_f1 * 100:6.2f}%')
-                        # update when there is a new best model
-                        if curr_f1 > best_f1:
-                            best_f1 = curr_f1
-                            best_model = model.state_dict()
-                            logger.info('New best model!')
-                        logger.info('-' * 80)
-                        model.train()
-                        # update validation result
-                        not_improved_epoch = lr_controller.add_value(curr_f1)
-                        if not_improved_epoch == 0:
-                            pass
-                        elif not_improved_epoch >= lr_controller.terminate_range:
-                            logger.info(
-                                'Terminating due to lack of validation improvement.')
-                            terminate = True
-                        elif not_improved_epoch % lr_controller.weight_decay_range == 0:
-                            logger.info(
-                                f'Re-initialize learning rate to '
-                                f'{optimizer.param_groups[0]["lr"] / 2.0:.8f}, {optimizer.param_groups[1]["lr"] / 2.0:.8f}'
-                            )
-                            optimizer = getattr(torch.optim, args.optimizer)([{'params': params, 'lr': optimizer.param_groups[0]['lr'] / 2.0}, 
-                                                                              {'params': attn_params, 'lr': optimizer.param_groups[1]['lr'] / 2.0}])
-                        # save checkpoint
-                        torch.save({
-                            'model': model.state_dict(),
-                            'best_model': best_model,
-                            'best_f1': best_f1,
-                            'optimizer': optimizer.state_dict(),
-                            'epoch': epoch,
-                            'step': step,
-                            'lr_controller': lr_controller,
-                            'cuda_rng_state': torch.cuda.random.get_rng_state(),
-                        }, ckpt_path)
-                        # pre-terminate to avoid saving problem
-                        if (time.time() - args.start_time) >= args.time_limit:
-                            logger.info('Training time is almost up -- terminating.')
-                            exit(0)
-                    add_scalar_dict(writer, 'resources',      # tag='resources/train/batch/...'
-                                    collector.collect(),
-                                    global_step=actual_step)
-            add_scalar_dict(writer, 'resources',              # tag='resources/train/...'
-                            collector.collect(),
-                            global_step=epoch)
-        
-        with collector(tag='validate'):
-            add_scalar_dict(writer, 'resources',              # tag='resources/validate/...'
-                            collector.collect(),
-                            global_step=epoch)
-            writer.add_scalar(tag="loss/train", scalar_value=cumulated_loss/cumulated_num, global_step=epoch)
-            model.eval()
-            with torch.no_grad():
-                curr_f1, val_loss = validate(data_loader['development'], model, getloss=True, use_argmax=args.use_argmax)
-            writer.add_scalar(tag="loss/val", scalar_value=val_loss, global_step=epoch)
-            model.train()
+            if actual_step % (args.real_batch_size // args.batch_size) == 0:
+                optimizer.step()
+            # update metadata
+            num_instances = len(batch['labels'])
+            cumulated_loss += loss.item() * num_instances
+            cumulated_num += num_instances
+            # log
+            if (actual_step % (args.real_batch_size // args.batch_size) == 0) and (
+                    actual_step // (args.real_batch_size // args.batch_size)) % args.log_step == 0:
+                logger.info(
+                    f'Train '
+                    f'Epoch #{epoch} | Step {actual_step // (args.real_batch_size // args.batch_size)} | '
+                    f'loss {cumulated_loss / cumulated_num:8.4f}'
+                )
+            # validate
+            if (actual_step % (args.real_batch_size // args.batch_size) == 0) and (
+                    actual_step // (args.real_batch_size // args.batch_size)) % args.eval_step == 0:
+                model.eval()
+                logger.info('-' * 80)
+                with torch.no_grad():
+                    curr_f1, val_loss_step = validate(data_loader['development'], model, getloss=True, use_argmax=args.use_argmax)
+                writer.add_scalar(tag="val_f1", scalar_value=curr_f1, global_step=actual_step // (args.real_batch_size // args.batch_size))
+                writer.add_scalar(tag="val_loss_step", scalar_value=val_loss_step, global_step=actual_step // (args.real_batch_size // args.batch_size))
+                logger.info(f'Validation F1 {curr_f1 * 100:6.2f}%')
+                # update when there is a new best model
+                if curr_f1 > best_f1:
+                    best_f1 = curr_f1
+                    best_model = model.state_dict()
+                    logger.info('New best model!')
+                logger.info('-' * 80)
+                model.train()
+                # update validation result
+                not_improved_epoch = lr_controller.add_value(curr_f1)
+                if not_improved_epoch == 0:
+                    pass
+                elif not_improved_epoch >= lr_controller.terminate_range:
+                    logger.info(
+                        'Terminating due to lack of validation improvement.')
+                    terminate = True
+                elif not_improved_epoch % lr_controller.weight_decay_range == 0:
+                    logger.info(
+                        f'Re-initialize learning rate to '
+                        f'{optimizer.param_groups[0]["lr"] / 2.0:.8f}, {optimizer.param_groups[1]["lr"] / 2.0:.8f}'
+                    )
+                    optimizer = getattr(torch.optim, args.optimizer)([{'params': params, 'lr': optimizer.param_groups[0]['lr'] / 2.0}, 
+                                                                      {'params': attn_params, 'lr': optimizer.param_groups[1]['lr'] / 2.0}])
+                # save checkpoint
+                torch.save({
+                    'model': model.state_dict(),
+                    'best_model': best_model,
+                    'best_f1': best_f1,
+                    'optimizer': optimizer.state_dict(),
+                    'epoch': epoch,
+                    'step': step,
+                    'lr_controller': lr_controller,
+                    'cuda_rng_state': torch.cuda.random.get_rng_state(),
+                }, ckpt_path)
+                # pre-terminate to avoid saving problem
+                if (time.time() - args.start_time) >= args.time_limit:
+                    logger.info('Training time is almost up -- terminating.')
+                    exit(0)
+        writer.add_scalar(tag="loss/train", scalar_value=cumulated_loss/cumulated_num, global_step=epoch)
+        model.eval()
+        with torch.no_grad():
+            curr_f1, val_loss = validate(data_loader['development'], model, getloss=True, use_argmax=args.use_argmax)
+        writer.add_scalar(tag="loss/val", scalar_value=val_loss, global_step=epoch)
+        model.train()
 
     # finished training, testing
     assert best_model is not None

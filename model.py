@@ -69,14 +69,14 @@ class SpanModel(nn.Module):
     #     span_repr = span_net(encoded_input, span_start, span_end, query_batch_idx)
     #     return span_repr
     
-    def calc_span_repr(self, flag, span_net, encoded_input, span_indices_1, query_batch_idx, span_indices_2=None):
+    def calc_span_repr(self, span_net, encoded_input, span_indices_1, query_batch_idx, span_indices_2=None):
         span_start_1, span_end_1 = span_indices_1[:, 0], span_indices_1[:, 1]
         if span_indices_2 != None:
             span_start_2, span_end_2 = span_indices_2[:, 0], span_indices_2[:, 1]
         else:
             span_start_2 = None
             span_end_2 = None
-        span_repr1, span_repr2 = span_net(flag, encoded_input, span_start_1, span_end_1, query_batch_idx, span_start_2, span_end_2)
+        span_repr1, span_repr2 = span_net(encoded_input, span_start_1, span_end_1, query_batch_idx, span_start_2, span_end_2)
         return span_repr1, span_repr2
 
     # def forward(self, batch):
@@ -121,44 +121,6 @@ class SpanModel(nn.Module):
 
     def forward(self, batch):
 
-        example = {'subwords': {'bert': torch.tensor([[ 101, 4208,  102],
-        [ 101, 8147,  102],
-        [ 101, 8147,  102],
-        [ 101, 1268,  102],
-        [ 101, 8147,  102],
-        [ 101, 8147,  102],
-        [ 101, 8147,  102],
-        [ 101, 3008,  102],
-        [ 101, 2206,  102],
-        [ 101, 8147,  102],
-        [ 101, 2066,  102],
-        [ 101, 1252,  102],
-        [ 101, 8147,  102],
-        [ 101, 1124,  102],
-        [ 101, 1252,  102],
-        [ 101, 8147,  102]], device='cuda:0')}, 'subword_to_word_idx': {'bert': torch.tensor([[-1,  0, -1],
-        [-1,  0, -1],
-        [-1,  0, -1],
-        [-1,  0, -1],
-        [-1,  0, -1],
-        [-1,  0, -1],
-        [-1,  0, -1],
-        [-1,  0, -1],
-        [-1,  0, -1],
-        [-1,  0, -1],
-        [-1,  0, -1],
-        [-1,  0, -1],
-        [-1,  0, -1],
-        [-1,  0, -1],
-        [-1,  0, -1],
-        [-1,  0, -1]])}, 'spans1': {'bert': [[[1, 1]], [[1, 1]], [[1, 1]], [[1, 1]], [[1, 1]], [[1, 1]], [[1, 1]], [[1, 1]], [[1, 1]], [[1, 1]], [[1, 1]], [[1, 1]], [[1, 1]], [[1, 1]], [[1, 1]], [[1, 1]]]}, 'spans2': {}, 'labels': [[[0, 14]], [[0, 14]], [[0, 14]], [[0, 14]], [[0, 14]], [[0, 14]], [[0, 14]], [[0, 14]], [[0, 19, 6]], [[0, 14]], [[0, 5, 6]], [[0, 5]], [[0, 14]], [[0, 4, 5]], [[0, 5]], [[0, 14]]], 'seq_len': torch.tensor([1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1])}
-
-        if torch.equal(batch['subwords']['bert'], example['subwords']['bert']):
-            print("batch: ", batch)
-            flag = 1
-        else:
-            flag = 0
-
         subwords = batch['subwords']
         spans_1 = batch['spans1']
         spans_2 = batch['spans2']
@@ -178,17 +140,15 @@ class SpanModel(nn.Module):
             encoder_key = self.p2e_map[pool_method]
             span_net = self.span_nets[pool_method]
             span_encoder_input = token_encoder_output_dict[encoder_key]
-            if flag:
-                print("ori_input: ", span_encoder_input)
 
             spans_idx_1 = _process_spans(spans_1[encoder_key])
             if self.num_spans == 2:
                 spans_idx_2 = _process_spans(spans_2[encoder_key])
             if self.num_spans == 1:
-                s1_repr, _ = self.calc_span_repr(flag, span_net, span_encoder_input, spans_idx_1, query_batch_idx)
+                s1_repr, _ = self.calc_span_repr(span_net, span_encoder_input, spans_idx_1, query_batch_idx)
                 s_repr = s1_repr
             elif self.num_spans == 2:
-                s1_repr, s2_repr = self.calc_span_repr(flag, span_net, span_encoder_input, spans_idx_1, query_batch_idx, spans_idx_2)
+                s1_repr, s2_repr = self.calc_span_repr(span_net, span_encoder_input, spans_idx_1, query_batch_idx, spans_idx_2)
                 s_repr = torch.cat((s1_repr, s2_repr), dim=1)
             final_repr_list.append(s_repr)
         final_repr = torch.cat(final_repr_list, dim=1)
@@ -200,8 +160,6 @@ class SpanModel(nn.Module):
             print("pred: ", pred)
             print()
             sys.exit()
-        # if flag:
-        #     sys.exit()
         return pred
 
 
