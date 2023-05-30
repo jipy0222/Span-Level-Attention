@@ -3,7 +3,6 @@ encoders/pretrained_transformers/bert_base_cased/
 encoders/pretrained_transformers/__pycache__/
 encoders/__pycache__/
 util/__pycache__/
-exp/
 attnexp/
 ontonotes/
 baseline/
@@ -13,3 +12,5 @@ train.slurm
 **.out
 baseline/
 trail/
+coref_ablation/
+ctl_ablation/

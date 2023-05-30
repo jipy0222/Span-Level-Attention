@@ -156,10 +156,10 @@ class MaxSpanRepr(SpanRepr, nn.Module):
             tmp_encoded_input = (torch.maximum(encoded_input[:, i:, :], tmp_encoded_input[:, 0:seq - i, :])).float()
             span_repr[:, range(seq - i), range(i, seq), :] = tmp_encoded_input
         
-        print("nan in max-pooling: ", torch.isnan(span_repr).any())
-        if torch.isnan(span_repr).any():
-            print("input: ", encoded_input)
-            print("span_repr: ", span_repr)
+        # print("nan in max-pooling: ", torch.isnan(span_repr).any())
+        # if torch.isnan(span_repr).any():
+        #     print("input: ", encoded_input)
+        #     print("span_repr: ", span_repr)
         
         if start_ids_2 == None:
             res = span_repr[query_batch_idx, start_ids_1, end_ids_1, :]
