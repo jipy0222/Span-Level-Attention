@@ -2,9 +2,9 @@ import torch
 
 
 def instance_f1_info(label, preds):
-    label_ones = label.sum().item()
-    preds_ones = preds.sum().item()
-    correct_ones = (label * preds).sum().item()
+    label_ones = label.sum().item()  # true positive + false negative
+    preds_ones = preds.sum().item()  # true positive + false positive
+    correct_ones = (label * preds).sum().item() # true positive
     return correct_ones, preds_ones, label_ones
 
 

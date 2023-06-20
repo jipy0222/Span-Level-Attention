@@ -6,6 +6,7 @@ import numpy as np
 import os
 import time
 import torch
+import torch.nn as nn
 from torch.utils.tensorboard import SummaryWriter
 
 from encoders.pretrained_transformers import Encoder
@@ -65,25 +66,44 @@ def forward_batch(model, batch, mode='loss', use_argmax=None):
     one is to pick the most possible label
     in some tasks like ctl, there might be multiple labels for one span
     '''
-    if use_argmax:
-        p = torch.argmax(preds, dim=1).cuda()
-        pred_labels = torch.zeros_like(preds)
+    if model.criteria != 'ce':
+        if use_argmax:
+            p = torch.argmax(preds, dim=1).cuda()
+            pred_labels = torch.zeros_like(preds)
+            pred_labels.scatter_(1, p.unsqueeze(dim=1), 1)
+            pred_labels = pred_labels.long()
+        else:
+            pred_labels = (preds > 0.5).long()
+        
+        if mode == 'pred_loss':
+            loss = model.training_criterion(preds, one_hot_labels.float())
+            return pred_labels, one_hot_labels, loss
+        elif mode == 'pred':  # for validation
+            return pred_labels, one_hot_labels
+        elif mode == 'loss':  # for training
+            loss = model.training_criterion(preds, one_hot_labels.float())
+            return loss
+    else:
+        m = nn.Softmax(dim=1)
+        new_preds = m(preds)
+        p = torch.argmax(new_preds, dim=1).cuda()
+        pred_labels = torch.zeros_like(new_preds)
         pred_labels.scatter_(1, p.unsqueeze(dim=1), 1)
         pred_labels = pred_labels.long()
-    else:
-        pred_labels = (preds > 0.5).long()
 
-    if mode == 'pred_loss':
-        loss = model.training_criterion(preds, one_hot_labels.float())
-        return pred_labels, one_hot_labels, loss
-    elif mode == 'pred':  # for validation
-        return pred_labels, one_hot_labels
-    elif mode == 'loss':  # for training
-        loss = model.training_criterion(preds, one_hot_labels.float())
-        return loss
+        if mode == 'pred_loss':
+            l = torch.tensor(labels_1d).cuda()
+            loss = model.training_criterion(preds, l)
+            return pred_labels, one_hot_labels, loss
+        elif mode == 'pred':  # for validation
+            return pred_labels, one_hot_labels
+        elif mode == 'loss':  # for training
+            l = torch.tensor(labels_1d).cuda()
+            loss = model.training_criterion(preds, l)
+            return loss
 
-# def validate(loader, model, logger, output_example=False, use_argmax=False):
-def validate(loader, model, getloss=False, output_example=False, use_argmax=False):
+# def validate(task, loader, model, logger, output_example=False, use_argmax=False):
+def validate(task, loader, model, getloss=False, output_example=False, use_argmax=False):
     # save the random state for recovery
     rng_state = torch.random.get_rng_state()
     cuda_rng_state = torch.cuda.random.get_rng_state()
@@ -93,6 +113,19 @@ def validate(loader, model, getloss=False, output_example=False, use_argmax=Fals
         cumulated_loss = cumulated_num = 0
         for batch_dict in loader:
             preds, ans, loss = forward_batch(model, batch_dict, mode='pred_loss', use_argmax=use_argmax)
+
+            if task == "ner":
+                num_pred = preds.shape[0]
+                num_label = len(model.label_itos)
+                mask = torch.ones(num_pred, num_label).long()
+
+                if torch.cuda.is_available():
+                    mask = mask.cuda()
+
+                mask[:, model.label_stoi["none"]] = 0
+                ans = ans * mask
+                preds = preds * mask
+
             num_instances = len(batch_dict['labels'])
             cumulated_loss += loss.item() * num_instances
             cumulated_num += num_instances
@@ -111,6 +144,19 @@ def validate(loader, model, getloss=False, output_example=False, use_argmax=Fals
             # print("batch_dict: ", batch_dict)
             # print(batch_dict['subwords']['bert'].size())
             preds, ans = forward_batch(model, batch_dict, mode='pred', use_argmax=use_argmax)
+            
+            if task == "ner":
+                num_pred = preds.shape[0]
+                num_label = len(model.label_itos)
+                mask = torch.ones(num_pred, num_label).long()
+
+                if torch.cuda.is_available():
+                    mask = mask.cuda()
+
+                mask[:, model.label_stoi["none"]] = 0
+                ans = ans * mask
+                preds = preds * mask
+
             num, dp, dr = instance_f1_info(ans, preds)
             numerator += num
             denom_p += dp
@@ -146,7 +192,7 @@ def create_parser():
     parser.add_argument('-exp_path', type=str, default='./exp')
     # shortcuts
     # experiment type
-    parser.add_argument('-task', type=str, default='nel', choices=('nel', 'ctl', 'coref', 'src', 'ctd', 'med'))
+    parser.add_argument('-task', type=str, default='nel', choices=('nel', 'ctl', 'coref', 'src', 'ctd', 'med', 'ner'))
 
     # training setting
     parser.add_argument('-batch_size', type=int, default=32)
@@ -156,11 +202,14 @@ def create_parser():
     parser.add_argument('-optimizer', type=str, default='Adam')
     parser.add_argument('-learning_rate', type=float, default=5e-4)
     parser.add_argument("-attn_lr", type=float, default=2e-4)
+    parser.add_argument("-encoder_lr", type=float, default=5e-5)
     parser.add_argument('-log_step', type=int, default=50)
     parser.add_argument('-eval_step', type=int, default=500)
+    parser.add_argument('-criteria', type=str, default='bce', choices=('bce', 'ce'))
     parser.add_argument('-seed', type=int, default=1111)
-    parser.add_argument('-train_length_filter', default=100, type=int)
-    parser.add_argument('-eval_length_filter', default=100, type=int)
+    parser.add_argument('-train_length_filter', type=int, default=100)
+    parser.add_argument('-eval_length_filter', type=int, default=100)
+    parser.add_argument('-weight_decay_range', type=int, default=5)
 
     # customized arguments
     parser.add_argument('-span_dim', type=int, default=256)
@@ -218,7 +267,7 @@ def main():
     args = process_args(args)
 
     set_seed(args.seed)
-    if args.task in ('ctl', 'nel', 'ctd', 'med'):
+    if args.task in ('ctl', 'nel', 'ctd', 'med', 'ner'):
         num_spans = 1
     elif args.task in ('coref', 'src'):
         num_spans = 2
@@ -327,6 +376,8 @@ def main():
         encoder_dict, span_dim=args.span_dim, pool_methods=args.pool_methods, use_proj=args.use_proj, 
         attn_schema=args.attn_schema, nhead=args.nhead, nlayer=args.nlayer, 
         label_itos={value: key for key, value in SpanDataset.label_dict.items()},
+        label_stoi={key: value for key, value in SpanDataset.label_dict.items()},
+        criteria = args.criteria,
         num_spans=num_spans
     )
 
@@ -343,24 +394,30 @@ def main():
 
         logger.info('Trainable parameters: ')
         params = list()
+        encoder_params = list()
         attn_params = list()
         names = list()
         for name, param in list(model.named_parameters()):
             if param.requires_grad:
                 if 'trans' not in name:
-                    params.append(param)
-                    logger.info(f"common, {name}: {param.data.size()}")
+                    if 'encoder' in name:
+                        encoder_params.append(param)
+                        logger.info(f"encoder, {name}: {param.data.size()}")
+                    else:
+                        params.append(param)
+                        logger.info(f"common, {name}: {param.data.size()}")
                 else:
                     attn_params.append(param)
                     logger.info(f"trans, {name}: {param.data.size()}")
                 names.append(name)
                 # logger.info(f"{name}: {param.data.size()}")
-        optimizer = getattr(torch.optim, args.optimizer)([{'params': params, 'lr': args.learning_rate}, 
+        optimizer = getattr(torch.optim, args.optimizer)([{'params': params, 'lr': args.learning_rate},
+                                                          {'params': encoder_params, 'lr': args.encoder_lr},
                                                           {'params': attn_params, 'lr': args.attn_lr}])
     # initialize best model info, and lr controller
     best_f1 = 0
     best_model = None
-    lr_controller = LearningRateController()
+    lr_controller = LearningRateController(weight_decay_range=args.weight_decay_range)
 
     # load checkpoint, if exists
     args.start_epoch = 0
@@ -374,7 +431,7 @@ def main():
         model.load_state_dict(best_model)
         model.eval()
         with torch.no_grad():
-            test_f1 = validate(data_loader, model, output_example=args.output_example, use_argmax=args.use_argmax)
+            test_f1 = validate(args.task, data_loader, model, output_example=args.output_example, use_argmax=args.use_argmax)
             logger.info(f'Test F1 {test_f1 * 100:6.2f}%')
         return 0
 
@@ -395,8 +452,8 @@ def main():
     model.eval()
     logger.info('-' * 80)
     with torch.no_grad():
-        # curr_f1 = validate(data_loader['development'], model, logger, use_argmax=args.use_argmax)
-        curr_f1 = validate(data_loader['development'], model, use_argmax=args.use_argmax)
+        # curr_f1 = validate(args.task, data_loader['development'], model, logger, use_argmax=args.use_argmax)
+        curr_f1 = validate(args.task, data_loader['development'], model, use_argmax=args.use_argmax)
     logger.info(f'Validation F1 {curr_f1 * 100:6.2f}%')
 
     # training
@@ -446,7 +503,7 @@ def main():
                 model.eval()
                 logger.info('-' * 80)
                 with torch.no_grad():
-                    curr_f1, val_loss_step = validate(data_loader['development'], model, getloss=True, use_argmax=args.use_argmax)
+                    curr_f1, val_loss_step = validate(args.task, data_loader['development'], model, getloss=True, use_argmax=args.use_argmax)
                 writer.add_scalar(tag="val_f1", scalar_value=curr_f1, global_step=actual_step // (args.real_batch_size // args.batch_size))
                 writer.add_scalar(tag="val_loss_step", scalar_value=val_loss_step, global_step=actual_step // (args.real_batch_size // args.batch_size))
                 logger.info(f'Validation F1 {curr_f1 * 100:6.2f}%')
@@ -468,10 +525,11 @@ def main():
                 elif not_improved_epoch % lr_controller.weight_decay_range == 0:
                     logger.info(
                         f'Re-initialize learning rate to '
-                        f'{optimizer.param_groups[0]["lr"] / 2.0:.8f}, {optimizer.param_groups[1]["lr"] / 2.0:.8f}'
+                        f'{optimizer.param_groups[0]["lr"] / 2.0:.8f}, {optimizer.param_groups[1]["lr"] / 2.0:.8f}, {optimizer.param_groups[2]["lr"] / 2.0:.8f}'
                     )
                     optimizer = getattr(torch.optim, args.optimizer)([{'params': params, 'lr': optimizer.param_groups[0]['lr'] / 2.0}, 
-                                                                      {'params': attn_params, 'lr': optimizer.param_groups[1]['lr'] / 2.0}])
+                                                                      {'params': encoder_params, 'lr': optimizer.param_groups[1]['lr'] / 2.0},
+                                                                      {'params': attn_params, 'lr': optimizer.param_groups[2]['lr'] / 2.0}])
                 # save checkpoint
                 torch.save({
                     'model': model.state_dict(),
@@ -490,7 +548,7 @@ def main():
         writer.add_scalar(tag="loss/train", scalar_value=cumulated_loss/cumulated_num, global_step=epoch)
         model.eval()
         with torch.no_grad():
-            curr_f1, val_loss = validate(data_loader['development'], model, getloss=True, use_argmax=args.use_argmax)
+            curr_f1, val_loss = validate(args.task, data_loader['development'], model, getloss=True, use_argmax=args.use_argmax)
         writer.add_scalar(tag="loss/val", scalar_value=val_loss, global_step=epoch)
         model.train()
 
@@ -499,7 +557,7 @@ def main():
     model.load_state_dict(best_model)
     model.eval()
     with torch.no_grad():
-        test_f1 = validate(data_loader['test'], model, use_argmax=args.use_argmax)
+        test_f1 = validate(args.task, data_loader['test'], model, use_argmax=args.use_argmax)
     logger.info(f'Test F1 {test_f1 * 100:6.2f}%')
 
 

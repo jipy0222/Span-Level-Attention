@@ -14,3 +14,12 @@ baseline/
 trail/
 coref_ablation/
 ctl_ablation/
+src_ablation/
+med_ablation/
+ctd_ablation/
+nel_ablation/
+ner/
+ner_ablation/
+ner_test/
+ner_baseline/
+fullyconnect_ablation/

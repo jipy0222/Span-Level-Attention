@@ -10,9 +10,11 @@ from encoders.pretrained_transformers.span_reprs import get_span_module
 class SpanModel(nn.Module):
     def __init__(self, encoder_dict, span_dim=256, pool_methods=None, use_proj=False, 
                  attn_schema=['none'], nhead=2, nlayer=2, 
-                 label_itos=None, num_spans=1, **kwargs):
+                 label_itos=None, label_stoi=None, criteria=None, num_spans=1, **kwargs):
         super().__init__()
         self.label_itos = label_itos  # a list saving the mapping from index to label, to output predictions
+        self.label_stoi = label_stoi  # reverse of label_itos
+        self.criteria = criteria
         self.set_encoder(encoder_dict)
         self.pool_methods = pool_methods
         self.span_nets = ModuleDict()
@@ -40,7 +42,10 @@ class SpanModel(nn.Module):
         self.pooled_dim = pooled_dim
         self.label_net = self.create_net(pooled_dim, span_dim, num_labels, self.num_spans)
 
-        self.training_criterion = nn.BCELoss()
+        if self.criteria != 'ce': 
+            self.training_criterion = nn.BCELoss()
+        else:
+            self.training_criterion = nn.CrossEntropyLoss()
 
     def set_encoder(self, encoder_dict):
         self.encoder_dict = {}
@@ -52,14 +57,23 @@ class SpanModel(nn.Module):
             self.encoder_dict[self.encoder_key_lst[1]] = self.encoder2
 
     def create_net(self, pooled_dim, span_dim, num_labels, num_spans):
-        return nn.Sequential(
-            nn.Linear(num_spans * pooled_dim, span_dim),
-            nn.Tanh(),
-            nn.LayerNorm(span_dim),
-            nn.Dropout(0.2),
-            nn.Linear(span_dim, num_labels),
-            nn.Sigmoid()
-        )
+        if self.criteria != 'ce':
+            return nn.Sequential(
+                nn.Linear(num_spans * pooled_dim, span_dim),
+                nn.Tanh(),
+                nn.LayerNorm(span_dim),
+                nn.Dropout(0.2),
+                nn.Linear(span_dim, num_labels),
+                nn.Sigmoid()
+            )
+        else:
+            return nn.Sequential(
+                nn.Linear(num_spans * pooled_dim, span_dim),
+                nn.Tanh(),
+                nn.LayerNorm(span_dim),
+                nn.Dropout(0.2),
+                nn.Linear(span_dim, num_labels)
+            )
 
     # calc_span_repr: encoded_input: [batch_size, seq_len, hidden_size]
     #                span_indices: [number_of_predicted_labels, 2]
