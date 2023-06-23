@@ -461,7 +461,7 @@ def get_span_module(input_dim, method="max", use_proj=False, proj_dim=256, attn_
         return FullyConnectSpanRepr(method, input_dim, use_proj=use_proj, proj_dim=proj_dim, nhead=nhead, nlayer=nlayer)
     else:
         for item in attn_schema:
-            if item not in ['insidetoken', 'samehandt', 'sibling', 'alltoken']:
+            if item not in ['insidetoken', 'samehandt', 'sibling', 'alltoken', 'newsibling']:
                 raise NotImplementedError
         return AttnSchemaSpanRepr(method, input_dim, use_proj=use_proj, proj_dim=proj_dim, attn_schema=attn_schema, nhead=nhead, nlayer=nlayer)
 

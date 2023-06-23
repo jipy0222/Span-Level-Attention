@@ -384,6 +384,26 @@ def subprocess(q_repr, k_repr, pattern):
 
         return attn_score
 
+    elif pattern == 'newsibling':
+        
+        left_key = torch.roll(k_repr, 1, 2)
+        left_attn_score = torch.einsum("bijm, bkim -> bijk", q_repr, left_key)
+        left_mask = torch.triu(torch.ones(seq, seq), diagonal=0).to(q_repr.device)
+        left_mask = torch.broadcast_to(left_mask[:, None, :], (seq, seq, seq)).contiguous()
+        left_mask[0, seq-1, :] = 0
+
+        right_key = torch.roll(k_repr, -1, 1)
+        right_attn_score = torch.einsum("bijm, bjkm -> bijk", q_repr, right_key)
+        right_mask = torch.tril(torch.ones(seq, seq), diagonal=0).to(q_repr.device)
+        right_mask = torch.broadcast_to(right_mask[None, ...], (seq, seq, seq)).contiguous()
+        right_mask[0, seq-1, :] = 0
+
+        attn_score = torch.cat([left_attn_score, right_attn_score], dim=3)
+        mask = torch.cat([left_mask, right_mask], dim=2)
+        attn_score = attn_score.masked_fill(mask == 1, float("-inf"))
+
+        return attn_score
+
     elif pattern == 'alltoken':
 
         attn_score = torch.einsum("bijm, bkkm -> bijk", q_repr, k_repr)
@@ -629,6 +649,21 @@ def mymulti_head_attention_forward(
             
             attn_output = attn_output + sub_attn_output
             
+            pivot += 2
+
+        elif pattern == 'newsibling':
+
+            sub_left_score = attn_score_split[pivot]
+            sub_right_score = attn_score_split[pivot+1]
+
+            left_value = torch.roll(v_repr, 1, 2)
+            right_value = torch.roll(v_repr, -1, 1)
+            left_attn_output = torch.einsum("bijk, bkim -> bijm", sub_left_score, left_value)
+            right_attn_output = torch.einsum("bijk, bjkm -> bijm", sub_right_score, right_value)
+            sub_attn_output = left_attn_output + right_attn_output
+
+            attn_output = attn_output + sub_attn_output
+
             pivot += 2
 
         elif pattern == 'alltoken':
