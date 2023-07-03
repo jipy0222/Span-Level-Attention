@@ -10,11 +10,12 @@ from encoders.pretrained_transformers.span_reprs import get_span_module
 class SpanModel(nn.Module):
     def __init__(self, encoder_dict, span_dim=256, pool_methods=None, use_proj=False, 
                  attn_schema=['none'], nhead=2, nlayer=2, 
-                 label_itos=None, label_stoi=None, criteria=None, num_spans=1, **kwargs):
+                 label_itos=None, label_stoi=None, criteria=None, case_study=False, num_spans=1, **kwargs):
         super().__init__()
         self.label_itos = label_itos  # a list saving the mapping from index to label, to output predictions
         self.label_stoi = label_stoi  # reverse of label_itos
         self.criteria = criteria
+        self.case_study = case_study
         self.set_encoder(encoder_dict)
         self.pool_methods = pool_methods
         self.span_nets = ModuleDict()

@@ -377,7 +377,7 @@ def main():
         attn_schema=args.attn_schema, nhead=args.nhead, nlayer=args.nlayer, 
         label_itos={value: key for key, value in SpanDataset.label_dict.items()},
         label_stoi={key: value for key, value in SpanDataset.label_dict.items()},
-        criteria = args.criteria,
+        criteria = args.criteria, case_study = args.eval, 
         num_spans=num_spans
     )
 
@@ -414,6 +414,7 @@ def main():
         optimizer = getattr(torch.optim, args.optimizer)([{'params': params, 'lr': args.learning_rate},
                                                           {'params': encoder_params, 'lr': args.encoder_lr},
                                                           {'params': attn_params, 'lr': args.attn_lr}])
+    
     # initialize best model info, and lr controller
     best_f1 = 0
     best_model = None
