@@ -18,6 +18,7 @@ class SpanDataset(Dataset):
         super().__init__()
         word_level_span_idx = kwargs.pop('word_level_span_idx', None)
         encoder_key_list = list(encoder_dict.keys())
+        self.encoder_type = encoder_key_list[0]
         with open(path, 'r') as f:
             raw_data = f.readlines()
 
@@ -126,7 +127,7 @@ class SpanDataset(Dataset):
         return len(self.data)
 
     def instance_length_getter(self, rec):
-        return len(rec['subwords']['bert'])
+        return len(rec['subwords'][self.encoder_type])
 
     def __getitem__(self, index):
         return self.data[index]

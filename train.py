@@ -222,7 +222,7 @@ def create_parser():
 
     # pool_method
     parser.add_argument('-pool_methods', type=str, nargs="*", default='max',
-                        choices=('mean', 'max', 'diff_sum', 'endpoint', 'attn'))
+                        choices=('mean', 'max', 'diff_sum', 'endpoint', 'attn', 'tokenlevel'))
 
     # span attention
     # parser.add_argument('-attn_schema', type=str, default='none', 
@@ -403,6 +403,9 @@ def main():
                     if 'encoder' in name:
                         encoder_params.append(param)
                         logger.info(f"encoder, {name}: {param.data.size()}")
+                    elif 'tokenlevel' in name:
+                        attn_params.append(param)
+                        logger.info(f"trans, {name}: {param.data.size()}")
                     else:
                         params.append(param)
                         logger.info(f"common, {name}: {param.data.size()}")

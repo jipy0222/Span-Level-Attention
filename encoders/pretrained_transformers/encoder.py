@@ -5,13 +5,14 @@ from packaging import version
 
 import transformers
 from transformers import BertModel
+from transformers import AutoModel
 from transformers import BertTokenizer
 
 
 logging.basicConfig(format='%(asctime)s - %(message)s', level=logging.DEBUG)
 
 # Constants
-MODEL_LIST = ['bert']
+MODEL_LIST = ['bert', 'spanbert']
 BERT_MODEL_SIZES = ['base', 'large']
 
 
@@ -55,6 +56,13 @@ class Encoder(nn.Module):
                     model_path, output_hidden_states=True)
                 self.tokenizer = BertTokenizer.from_pretrained(
                     model_path, do_lower_case=do_lower_case)
+            elif model == 'spanbert':
+                tokenizer_path = "../pretraining-models/" + model_name[4:]
+                print(model_path, tokenizer_path)
+                self.model = AutoModel.from_pretrained(
+                    model_path, output_hidden_states=True)
+                self.tokenizer = BertTokenizer.from_pretrained(
+                    tokenizer_path, do_lower_case=do_lower_case)
 
             self.num_layers = self.model.config.num_hidden_layers + 1
             self.hidden_size = self.model.config.hidden_size
@@ -109,7 +117,7 @@ class Encoder(nn.Module):
                     # Basic tokenizer is not a part of Roberta
                     sentence = sentence.strip().split()
 
-            if self.base_name in ['bert']:
+            if self.base_name in ['bert', 'spanbert']:
                 token_ids = []
                 for word_idx, word in enumerate(sentence):
                     subword_list = tokenizer.tokenize(word)

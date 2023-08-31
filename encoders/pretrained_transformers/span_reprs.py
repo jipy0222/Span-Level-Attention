@@ -176,6 +176,53 @@ class MaxSpanRepr(SpanRepr, nn.Module):
             return self.input_dim
 
 
+class TokenlevelSpanRepr(SpanRepr, nn.Module):
+    """Class implementing the max-pool span representation."""
+
+    def __init__(self, input_dim, use_proj=False, proj_dim=256):
+        """just return the attention pooled term."""
+        
+        super(TokenlevelSpanRepr, self).__init__(input_dim, use_proj=use_proj, proj_dim=proj_dim)
+        if use_proj:
+            input_dim = proj_dim
+        trans_encoder_layer = nn.TransformerEncoderLayer(d_model=input_dim, nhead=4)
+        trans_layernorm = nn.LayerNorm(input_dim)
+        self.trans = nn.TransformerEncoder(trans_encoder_layer, num_layers=4, norm=trans_layernorm)
+
+    def forward(self, encoded_input, start_ids_1, end_ids_1, query_batch_idx, start_ids_2, end_ids_2):
+        if self.use_proj:
+            encoded_input = self.proj(encoded_input)
+        
+        bsz, seq, hd = encoded_input.size()
+        trans_input = self.trans(encoded_input.permute(1, 0, 2)).permute(1, 0, 2)
+
+        tmp_encoded_input = trans_input
+        bsz, seq, hd = trans_input.size()
+        span_repr = torch.zeros([bsz, seq, seq, hd], device=trans_input.device)
+        for i in range(seq):
+            tmp_encoded_input = (torch.maximum(trans_input[:, i:, :], tmp_encoded_input[:, 0:seq - i, :])).float()
+            span_repr[:, range(seq - i), range(i, seq), :] = tmp_encoded_input
+        
+        # print("nan in max-pooling: ", torch.isnan(span_repr).any())
+        # if torch.isnan(span_repr).any():
+        #     print("input: ", encoded_input)
+        #     print("span_repr: ", span_repr)
+        
+        if start_ids_2 == None:
+            res = span_repr[query_batch_idx, start_ids_1, end_ids_1, :]
+            return res, None
+        else:
+            res1 = span_repr[query_batch_idx, start_ids_1, end_ids_1, :]
+            res2 = span_repr[query_batch_idx, start_ids_2, end_ids_2, :]
+            return res1, res2
+
+    def get_output_dim(self):
+        if self.use_proj:
+            return self.proj_dim
+        else:
+            return self.input_dim
+
+
 class orig_AttnSpanRepr(SpanRepr, nn.Module):
     """Class implementing the attention-based span representation."""
 
@@ -455,6 +502,8 @@ def get_span_module(input_dim, method="max", use_proj=False, proj_dim=256, attn_
             return EndPointRepr(input_dim, use_proj=use_proj, proj_dim=proj_dim)
         elif method == "attn":
             return AttnSpanRepr(input_dim, use_proj=use_proj, proj_dim=proj_dim)
+        elif method == "tokenlevel":
+            return TokenlevelSpanRepr(input_dim, use_proj=use_proj, proj_dim=proj_dim)
         else:
             raise NotImplementedError
     elif attn_schema == ['fullyconnect']:
